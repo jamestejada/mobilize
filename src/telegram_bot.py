@@ -3,8 +3,9 @@ import logging
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram.enums import ParseMode, ChatAction
 from aiogram.filters import CommandStart, Command, CommandObject
+from aiogram.methods.send_chat_action import SendChatAction
 
 from .settings import TOKEN
 from .mobilize import get_events
@@ -37,6 +38,7 @@ async def send_long_message(message: types.Message, text: str, chunk_size: int =
 @dp.message(Command("analyze"))
 async def analyze_events(message: types.Message, command: CommandObject):
     await message.answer("Analyzing events...")
+    # await bot.send_chat_action(message.chat.id, action="typing")
     args = command.args
     if not args or len(args.split()) < 2:
         await message.reply("Please provide a zipcode and your analysis question. Usage: /analyze <zipcode> <question>")
@@ -98,7 +100,12 @@ async def send_events(message: types.Message, command: CommandObject):
 
 @dp.message()
 async def regular_message(message: types.Message):
-    await message.answer("Thinking...")
+    await bot.send_chat_action(
+            chat_id=message.chat.id,
+            action=ChatAction.TYPING,
+            request_timeout=10
+        )
+    # await message.answer("Thinking...")
     response = await llm.simple_query(
             user_input=message.text,
             chat_id=message.chat.id
