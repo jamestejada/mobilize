@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List
@@ -148,22 +148,65 @@ class Event:
     @property
     def telegram_message(self) -> str:
         return '\n'.join([
-            f"__*{self.title}*__",
+            f"_*{self.title}*_",
             f"Date: {self.timeslots[0].start_date.strftime('%Y-%m-%d %H:%M')}",
             f"Location: {self.location_str}",
+            f"Coordinates: {self.coordinates}",
             f"Organizer: {self.sponsor.name}",
             f"[More Info]({self.browser_url})"
         ])
-    
+
+    @property
+    def coordinates(self) -> Optional[str]:
+        if not self.location.location:
+            return "N/A"
+        return f"{self.location.location.latitude}, {self.location.location.longitude}"
+
     @property
     def llm_context(self) -> str:
+        """Returns a formatted string with of a single event for LLM context.
+        FORMAT:
+            Title: {title}
+            Type: {event_type}
+            Date: {start_date}
+            Location: {location_str}
+            Coordinates: {coordinates}
+            Organizer: {organizer}
+            URL: {browser_url}
+            Summary: {summary}
+            Description: {description}
+        """
         return '\n'.join([
-            f"Event: {self.title}",
-            f"Date: {self.timeslots[0].start_date.strftime('%Y-%m-%d %H:%M')}",
+            f"Title: {self.title}",
+            f"Type: {self.event_type.value}",
+            f"Date: {self.timeslots[0].start_date.strftime('%A, %B %d, %Y at %I:%M %p')}",
             f"Location: {self.location_str}",
+            f"Coordinates: {self.coordinates}",
+            f"Organizer: {self.sponsor.name}",
             f"URL: {self.browser_url}",
             f"Summary: {self.summary}",
             f"Description: {self.description}",
-
         ])
 
+
+UNKNOWN_TOOL_NAME = "Unknown Tool"
+UNKNOWN_TOOL_ID = "Unknown Tool ID"
+
+@dataclass
+class ToolCall:
+    # NOTE: This is a mirror of LangChain's ToolCall(TypedDict) class
+    # with added validation property.
+    """Represents a tool call made by the LLM."""
+    name: Optional[str] = UNKNOWN_TOOL_NAME
+    args: Optional[dict] = field(default_factory=dict)
+    id: Optional[str] = UNKNOWN_TOOL_ID
+    type: Optional[str] = None
+
+    @property
+    def valid(self) -> bool:
+        return bool(
+                self.name
+                and self.id
+                and self.name != UNKNOWN_TOOL_NAME 
+                and self.id != UNKNOWN_TOOL_ID
+            )

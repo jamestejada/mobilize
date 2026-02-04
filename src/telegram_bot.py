@@ -1,14 +1,14 @@
 import asyncio
 import logging
+from typing import Awaitable
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode, ChatAction
+from aiogram.enums import ParseMode, ChatAction, ChatType
 from aiogram.filters import CommandStart, Command, CommandObject
-from aiogram.methods.send_chat_action import SendChatAction
 
 from .settings import TOKEN
-from .mobilize import get_events
+from .tools.mobilize import get_events
 from .ai import LLM
 
 logging.basicConfig(level=logging.INFO)
@@ -26,91 +26,114 @@ llm = LLM()
 async def send_welcome(message: types.Message):
     await message.reply(
         "Hi! I'm your AI Powered OSINT Bot.\n"
-        "\t- Use /events <zipcode> to get upcoming events.\n"
-        "\t- Use /analyze <zipcode> <question> to get analysis on events."
+        "\t- Use /protests <location> to get upcoming protests.\n"
+        "\nOtherwise, mention me @mention me in the group chat"
+        " and I'll try to help you with your questions!"
     )
 
-async def send_long_message(message: types.Message, text: str, chunk_size: int = 4000):
+
+def clean_markdown(text: str) -> str:
+    """Cleans markdown formatting from text."""
+    REPLACEMENTS = [
+        ('**', '*'),
+        ('#', ''),
+    ]
+    for old, new in REPLACEMENTS:
+        text = text.replace(old, new)
+    return text
+
+
+async def send_long_message(
+            message: types.Message,
+            text: str,
+            disable_web_page_preview: bool = False,
+            chunk_size: int = 4000
+        ):
     """Split long messages into chunks."""
     for i in range(0, len(text), chunk_size):
-        await message.answer(text[i:i + chunk_size], parse_mode=ParseMode.MARKDOWN)
-
-@dp.message(Command("analyze"))
-async def analyze_events(message: types.Message, command: CommandObject):
-    await message.answer("Analyzing events...")
-    # await bot.send_chat_action(message.chat.id, action="typing")
-    args = command.args
-    if not args or len(args.split()) < 2:
-        await message.reply("Please provide a zipcode and your analysis question. Usage: /analyze <zipcode> <question>")
-        return
-    
-    parts = args.split(maxsplit=1)
-    zipcode = parts[0]
-    user_input = parts[1]
-
-    if not zipcode.isdigit() or not len(zipcode) == 5:
-        await message.reply("Please provide a valid 5-digit zipcode. Usage: /analyze <zipcode> <question>")
-        return
-
-    await message.answer(
-        f"Fetching events for zipcode: *{zipcode}* and analyzing your question..."
-        )
-    events = await get_events(zipcode)
-    if len(events) == 0:
-        await message.answer("No upcoming events found in your area.")
-        return
-    analysis = await llm.provide_analysis(
-            user_input=args,
-            events=events,
-            chat_id=message.chat.id
-        )
-    print(analysis)
-    await send_long_message(message, f"Analysis:\n{analysis}")
-
-
-@dp.message(Command("events"))
-async def send_events(message: types.Message, command: CommandObject):
-    args = command.args
-    if not args or not args.isdigit():
-        await message.reply("Please provide a valid zipcode. Usage: /events <zipcode>")
-        return
-    
-    if not len(args) == 5:
-        await message.reply("Please provide a 5-digit zipcode. Usage: /events <zipcode>")
-        return
-
-    zipcode = args
-
-    await message.answer(
-        f"Fetching protest activity for zipcode: *{zipcode}*..."
-        )
-    events = await get_events(zipcode)
-    if len(events) == 0:
-        await message.answer("No upcoming events found in your area.")
-        return
-    for event in events:
-        logging.info(f"Sending event: {event.title}")
+        chunk = clean_markdown(text[i:i + chunk_size])
         try:
             await message.answer(
-                event.telegram_message,
-                link_preview_options=types.LinkPreviewOptions(is_disabled=True)
+                chunk,
+                parse_mode=ParseMode.MARKDOWN,
+                link_preview_options=types.LinkPreviewOptions(
+                    is_disabled=disable_web_page_preview
+                    )
                 )
-        except Exception as e:
-            logging.error(f"Failed to send event message: {e}")
+        except Exception:
+            await message.answer(
+                chunk,
+                parse_mode=None,
+                link_preview_options=types.LinkPreviewOptions(
+                    is_disabled=disable_web_page_preview
+                )
+            )
+
+
+@dp.message(Command("protests"))
+async def send_events(message: types.Message, command: CommandObject):
+    location = command.args
+    if not location:
+        await message.reply("Please provide a location (zipcode, address, or city name). Usage: /events <location>")
+        return
+
+    await message.answer(
+        f"Fetching protest activity for: *{location}*..."
+        )
+    events = await get_events(location)
+    if len(events) == 0:
+        await message.answer("No upcoming protests found in your area.")
+        return
+
+    # Batch events into a single message to avoid rate limits
+    events_text = f"Found {len(events)} protests around {location}:\n\n"
+    events_text += "\n\n------------------\n\n".join(
+            [event.telegram_message for event in events]
+        )
+    await send_long_message(
+            message=message,
+            text=events_text,
+            disable_web_page_preview=True
+        )
 
 @dp.message()
 async def regular_message(message: types.Message):
+    if not message.text:
+        # Ignore status updates or non-text messages
+        return
+    
+    if message.chat.type == ChatType.PRIVATE:
+        await message.reply("Sorry, I only work in group chats to help reduce spam.")
+        return
+    
+    # only respond when @mentioned in group chats
+    bot_info = await bot.get_me()
+    bot_username = f"@{bot_info.username}"
+    if bot_username.lower() not in message.text.lower():
+        return
+
     await bot.send_chat_action(
             chat_id=message.chat.id,
             action=ChatAction.TYPING,
             request_timeout=10
         )
-    # await message.answer("Thinking...")
+    user_text= message.text.replace(bot_username, "").strip()
+
+    async def update_callback(text: str) -> Awaitable[None]:
+         await send_long_message(
+                message=message,
+                text=text
+                )
+
+    await message.answer("Thinking... (this may take a moment)")
     response = await llm.simple_query(
-            user_input=message.text,
+            user_input=user_text,
             chat_id=message.chat.id
         )
-    await send_long_message(message, response)
+    await send_long_message(
+            message=message,
+            text=response
+        )
 
 
 async def run_bot():
