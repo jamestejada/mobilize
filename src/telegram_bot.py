@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import Awaitable
 
@@ -9,7 +8,8 @@ from aiogram.filters import CommandStart, Command, CommandObject
 
 from .settings import TOKEN
 from .tools.mobilize import get_events
-from .ai import LLM
+from .tools.bsky import trending_topics
+from .ai import Praetor
 
 logging.basicConfig(level=logging.INFO)
 
@@ -18,7 +18,7 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
     )
 dp = Dispatcher()
-llm = LLM()
+llm = Praetor()
 
 
 @dp.message(CommandStart())
@@ -27,6 +27,7 @@ async def send_welcome(message: types.Message):
     await message.reply(
         "Hi! I'm your AI Powered OSINT Bot.\n"
         "\t- Use /protests <location> to get upcoming protests.\n"
+        "\t- Use /trending to see current trending topics on Bluesky.\n"
         "\nOtherwise, mention me @mention me in the group chat"
         " and I'll try to help you with your questions!"
     )
@@ -68,6 +69,17 @@ async def send_long_message(
                     is_disabled=disable_web_page_preview
                 )
             )
+
+
+@dp.message(Command("trending"))
+async def send_trending_topics(message: types.Message):
+    await message.answer("Fetching trending topics on Bluesky...")
+    topics = await trending_topics()
+    await send_long_message(
+        message=message,
+        text=topics,
+        disable_web_page_preview=True
+    )
 
 
 @dp.message(Command("protests"))
@@ -125,19 +137,19 @@ async def regular_message(message: types.Message):
                 text=text
                 )
 
-    await message.answer("Thinking... (this may take a moment)")
-    response = await llm.simple_query(
-            user_input=user_text,
-            chat_id=message.chat.id
-        )
-    await send_long_message(
-            message=message,
-            text=response
-        )
-
+    await message.answer("_Thinking..._")
+    # NOTE: Messaging will be handled from within the LLM
+    # class itself to provide real-time updates.
+    # await llm.simple_query(
+    #         user_input=user_text,
+    #         chat_id=message.chat.id,
+    #         update_chat=update_callback
+    #     )
+    await llm.handle_query(
+        user_input=user_text,
+        chat_id=message.chat.id,
+        update_chat=update_callback
+    )
 
 async def run_bot():
     await dp.start_polling(bot)
-
-if __name__ == '__main__':
-    asyncio.run(run_bot())

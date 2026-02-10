@@ -2,9 +2,10 @@ from typing import Optional
 import logging
 
 import aiohttp
-from langchain_core.tools import tool
+from pydantic_ai import RunContext
 
 from ..models import Event, EventType
+from ..ai import AgentDeps
 from ..settings import MobilizeEndpoints
 from .geocoding import location_to_zipcode
 
@@ -23,8 +24,9 @@ def build_params(zipcode: int | str, max_distance: Optional[int] = 75) -> dict:
         "max_dist": max_distance,
     }
 
-@tool
+
 async def get_protests_for_llm(
+            ctx: RunContext[AgentDeps],
             location: int | str,
             max_distance: Optional[int] = 75
         ) -> str:
@@ -44,6 +46,7 @@ async def get_protests_for_llm(
     logger.info(
         f"LLM Tool: get_protests_for_llm called with location={location}, max_distance={max_distance}"
         )
+    await ctx.deps.update_chat(f"_Finding protest events {max_distance} miles around {location}_")
     events = await get_events(location=location, max_distance=max_distance)
     if not events:
         return "No upcoming protest events found in the area."

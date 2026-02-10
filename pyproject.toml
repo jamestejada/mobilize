@@ -1,5 +1,5 @@
 [project]
-name = "mobilize"
+name = "Oculis_Apertis"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -9,9 +9,11 @@ dependencies = [
     "yarl>=1.9,<2",
     "aiogram>=3.4,<4",
     "python-dotenv>=1.0,<2",
-    "langchain>=0.3,<0.4",
-    "langchain-ollama>=0.2,<0.3",
     "geopy>=2.4,<3",
     "ddgs>=9,<10",
     "atproto>=0.0.65,<1",
+    "feedparser>=6.0,<7",
+    "python-dateutil>=2.8,<3",
+    "numpy>=2.0,<3",
+    "pydantic-ai>=1.57.0",
 ]

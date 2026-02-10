@@ -1,8 +1,10 @@
-from langchain_core.tools import tool
 from ddgs import DDGS
+from pydantic_ai import RunContext
 
 from dataclasses import dataclass
 from typing import Optional
+
+from ..ai import AgentDeps
 
 
 @dataclass
@@ -19,8 +21,7 @@ class WebResult:
             ])
 
 
-@tool
-async def search_web(query: str, num_results: int = 20) -> str:
+async def search_web(ctx: RunContext[AgentDeps], query: str, num_results: int = 20) -> str:
     """Performs a web search and returns summarized results.
     
     Args:
@@ -30,6 +31,7 @@ async def search_web(query: str, num_results: int = 20) -> str:
     Returns:
         str: A summary of the top search results.
     """
+    await ctx.deps.update_chat(f"_Searching web for: {query}_")
     results = DDGS().text(
         query,
         max_results=num_results
@@ -59,8 +61,8 @@ class NewsResult:
                 f"Image: {self.image}" if self.image else ""
             ])
 
-@tool
-async def search_news(query: str, num_results: int = 20) -> str:
+
+async def search_news(ctx: RunContext[AgentDeps], query: str, num_results: int = 20) -> str:
     """Performs a news search and returns summarized results.
     
     Args:
@@ -70,6 +72,7 @@ async def search_news(query: str, num_results: int = 20) -> str:
     Returns:
         str: A summary of the top news results.
     """
+    await ctx.deps.update_chat(f"_Searching news for: {query}_")
     results = DDGS().news(
         query,
         max_results=num_results
