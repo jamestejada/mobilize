@@ -13,8 +13,12 @@ from src.tools.bsky import (
 from src.tools.rss_feeds import (
     list_gov_rss_feeds,
     get_gov_rss_feed,
+    list_us_news_rss_feeds,
+    get_us_news_rss_feed,
+    list_world_news_rss_feeds,
+    get_world_news_rss_feed
 )
-from src.tools.polymarket import get_polymarket_sentiment
+from src.tools.polymarket import search_polymarket, get_polymarket_event
 
 
 TOOLS = [
@@ -26,6 +30,11 @@ TOOLS = [
     Tool(get_trending_topics, takes_ctx=True),
     Tool(list_gov_rss_feeds, takes_ctx=True),
     Tool(get_gov_rss_feed, takes_ctx=True),
+    Tool(list_us_news_rss_feeds, takes_ctx=True),
+    Tool(get_us_news_rss_feed, takes_ctx=True),
+    Tool(list_world_news_rss_feeds, takes_ctx=True),
+    Tool(get_world_news_rss_feed, takes_ctx=True),
     Tool(get_protests_for_llm, takes_ctx=True),
-    Tool(get_polymarket_sentiment, takes_ctx=True),
+    Tool(search_polymarket, takes_ctx=True),
+    Tool(get_polymarket_event, takes_ctx=True),
 ]

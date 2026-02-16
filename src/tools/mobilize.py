@@ -1,15 +1,19 @@
 from typing import Optional
 import logging
 
-import aiohttp
 from pydantic_ai import RunContext
 
 from ..models import Event, EventType
 from ..ai import AgentDeps
 from ..settings import MobilizeEndpoints
 from .geocoding import location_to_zipcode
+from .http_client import AsyncHTTPClient
 
 logger = logging.getLogger(__name__)
+
+
+class MobilizeClient(AsyncHTTPClient):
+    BASE_URL = str(MobilizeEndpoints.API_ROOT)
 
 def build_params(zipcode: int | str, max_distance: Optional[int] = 75) -> dict:
     return {
@@ -49,7 +53,8 @@ async def get_protests_for_llm(
     await ctx.deps.update_chat(f"_Finding protest events {max_distance} miles around {location}_")
     events = await get_events(location=location, max_distance=max_distance)
     if not events:
-        return "No upcoming protest events found in the area."
+        logger.info(f"No upcoming protest events found near {location}")
+        return ""
     return (
             f"Found {len(events)} protest events near {location}:\n\n"
             + "------".join([event.llm_context for event in events])
@@ -72,20 +77,13 @@ async def get_events(
         ) -> list[Event]:
     """Fetches events from Mobilize API based on location and max distance."""
     zipcode = await get_zipcode_from_location(location)
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-                    MobilizeEndpoints.EVENTS,
-                    params=build_params(
-                        zipcode=zipcode,
-                        max_distance=max_distance
-                        )
-                ) as response:
-            data = await response.json()
-            events = data.get('data', [])
-            if not events:
-                return []
-            event_count = data.get('count', 0)
-            logger.info(f"Number of events found: {event_count}")
-            return [
-                Event(**event) for event in data.get('data', [])
-            ]
+    if zipcode is None:
+        logger.warning(f"Could not resolve zipcode for '{location}', skipping API call")
+        return []
+    api_parameters = build_params(zipcode=zipcode, max_distance=max_distance)
+    async with MobilizeClient() as client:
+        data = await client.request(endpoint="events", params=api_parameters)
+    if data is None:
+        return []
+    events = data.get("data") or []
+    return [Event(**event) for event in events]

@@ -6,7 +6,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction, ChatType
 from aiogram.filters import CommandStart, Command, CommandObject
 
-from .settings import TOKEN
+from .settings import TelegramBotCredentials
 from .tools.mobilize import get_events
 from .tools.bsky import trending_topics
 from .ai import Praetor
@@ -14,7 +14,7 @@ from .ai import Praetor
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(
-    token=TOKEN,
+    token=TelegramBotCredentials.TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
     )
 dp = Dispatcher()
@@ -136,19 +136,33 @@ async def regular_message(message: types.Message):
                 message=message,
                 text=text
                 )
-
-    await message.answer("_Thinking..._")
     # NOTE: Messaging will be handled from within the LLM
     # class itself to provide real-time updates.
-    # await llm.simple_query(
-    #         user_input=user_text,
-    #         chat_id=message.chat.id,
-    #         update_chat=update_callback
-    #     )
     await llm.handle_query(
         user_input=user_text,
         chat_id=message.chat.id,
         update_chat=update_callback
+    )
+
+
+@dp.startup()
+async def on_startup():
+    await independent_message(
+        "_Oculis Apertis Bot is now online!_"
+        )
+
+
+@dp.shutdown()
+async def on_shutdown():
+    await independent_message(
+        "_Oculis Apertis Bot is shutting down._"
+        )
+
+
+async def independent_message(message: str):
+    await bot.send_message(
+        chat_id=TelegramBotCredentials.CHANNEL_ID,
+        text=message,
     )
 
 async def run_bot():

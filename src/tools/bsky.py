@@ -1,5 +1,7 @@
+import logging
+
 from atproto import AsyncClient
-# from langchain_core.tools import tool
+from atproto_client.exceptions import RequestErrorBase
 from pydantic_ai import RunContext
 
 from dataclasses import dataclass
@@ -7,6 +9,8 @@ from typing import Optional
 
 from ..settings import BlueSkyCredentials
 from ..ai import AgentDeps
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,6 +49,16 @@ async def bluesky_login() -> AsyncClient:
     return client
 
 
+def sanitize_handle(handle: str) -> str:
+    """Sanitizes a Bluesky handle by removing '@' if present."""
+    if 'did:plc:' in handle:
+        return handle  # Assume it's already a DID and return as is
+    handle = handle.strip().lstrip('@')
+    if not '.bsky.social' in handle:
+        handle += '.bsky.social'
+    return handle
+
+
 
 async def search_bluesky_posts(ctx: RunContext[AgentDeps], query: str, limit: int = 30) -> str:
     """Searches for posts on Bluesky containing the given query.
@@ -58,15 +72,20 @@ async def search_bluesky_posts(ctx: RunContext[AgentDeps], query: str, limit: in
         str: A formatted string of the found posts.
     """
     await ctx.deps.update_chat("_Searching Bluesky Posts_")
-    client = await bluesky_login()
-    results = await client.app.bsky.feed.search_posts(
-        params={
-            "q": query,
-            "limit": limit
-        }
-    )
-    if not results:
-        return "No posts found matching the query."
+    try:
+        client = await bluesky_login()
+        results = await client.app.bsky.feed.search_posts(
+            params={
+                "q": query,
+                "limit": limit
+            }
+        )
+        if not results:
+            logger.warning(f"No Bluesky posts found for query: '{query}'")
+            return ""
+    except RequestErrorBase as e:
+        logger.error(f"Bluesky search failed for '{query}': {e}")
+        return ""
     formatted_posts = [
         "Here are the Bluesky posts found:",
         "---------"
@@ -87,18 +106,26 @@ async def get_bluesky_profile(ctx: RunContext[AgentDeps], handle: str) -> str:
 
     Returns:
         str: A formatted string of the profile information."""
+    handle = sanitize_handle(handle)
     await ctx.deps.update_chat(f"_Checking {handle} profile_")
-    client = await bluesky_login()
-    profile = await client.app.bsky.actor.get_profile(params={"actor": handle})
+    try:
+        client = await bluesky_login()
+        profile = await client.app.bsky.actor.get_profile(
+                params={"actor": handle}
+            )
+    except RequestErrorBase as e:
+        logger.error(f"Bluesky profile lookup failed for '{handle}': {e}")
+        return ""
     if not profile:
-        return f"No profile found for handle: {handle}"
+        logger.warning(f"No Bluesky profile found for handle: {handle}")
+        return ""
     return "\n".join([
             f"Profile Information for @{handle}:",
-            f"Display Name: {profile.displayName}",
+            f"Display Name: {profile.display_name}",
             f"Description: {profile.description}",
-            f"Followers: {profile.followersCount}",
-            f"Following: {profile.followsCount}",
-            f"Posts: {profile.postsCount}"
+            f"Followers: {profile.followers_count}",
+            f"Following: {profile.follows_count}",
+            f"Posts: {profile.posts_count}"
         ])
 
 
@@ -114,13 +141,19 @@ async def get_author_feed(ctx: RunContext[AgentDeps], handle: str, limit: int = 
     Returns:
         str: A formatted string of the recent posts from the profile.
     """
+    handle = sanitize_handle(handle)
     await ctx.deps.update_chat(f"_Checking {handle}'s feed_")
-    client = await bluesky_login()
-    results = await client.app.bsky.feed.get_author_feed(
-        params={"actor": handle, "limit": limit}
-    )
-    if not results:
-        return f"No posts found for profile: @{handle}"
+    try:
+        client = await bluesky_login()
+        results = await client.app.bsky.feed.get_author_feed(
+            params={"actor": handle, "limit": limit}
+        )
+        if not results:
+            logger.warning(f"No posts found for Bluesky profile: @{handle}")
+            return ""
+    except RequestErrorBase as e:
+        logger.error(f"Bluesky author feed failed for '{handle}': {e}")
+        return ""
     formatted_posts = [
         f"Recent posts from @{handle}:",
         "---------"
@@ -138,10 +171,15 @@ async def trending_topics() -> str:
     Returns:
         str: A formatted string of the current trending topics on Bluesky.
     """
-    client = await bluesky_login()
-    results = await client.app.bsky.unspecced.get_trending_topics()
-    if not results:
-        return "No trending topics found."
+    try:
+        client = await bluesky_login()
+        results = await client.app.bsky.unspecced.get_trending_topics()
+        if not results:
+            logger.warning("No trending topics found on Bluesky")
+            return ""
+    except RequestErrorBase as e:
+        logger.error(f"Bluesky trending topics failed: {e}")
+        return ""
     formatted_topics = [
         "Current trending topics on Bluesky:",
         "---------"

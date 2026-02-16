@@ -40,9 +40,6 @@ class RSS:
 
 
 class Prompts:
-    # GENERAL_OSINT = PROMPT_PATH.joinpath("osint_prompt.txt").read_text()
-    # REFLECTION = PROMPT_PATH.joinpath("reflection_prompt.txt").read_text()
-
     COORDINATOR = PROMPT_PATH.joinpath("coordinator.md").read_text()
     REFLECTION = PROMPT_PATH.joinpath("reflection.md").read_text()
     RESEARCHER = PROMPT_PATH.joinpath("researcher.md").read_text()
@@ -64,13 +61,13 @@ class BlueSkyCredentials:
     HANDLE = os.getenv("BSKY_HANDLE")
     APP_PASSWORD = os.getenv("BSKY_APP_PASSWORD")
 
+class TelegramBotCredentials:
+    TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    CHANNEL_ID = int(os.getenv("BOT_CHANNEL_ID"))
 
-# class RelevanceWeights:
-#     TITLE_WEIGHT = 0.50
-#     SOURCE_WEIGHT = 0.50
-#     # DATE_CURRENT_WEIGHT = 0.1  # Multiplied by freshness score (1 for current, 0 for outdated)
-#     DATE_CURRENT_WEIGHT = 0.0
+class Models:
+    Research_Coordinate = os.getenv("RESEARCH_COORDINATE_MODEL", "qwen3:8b-q4_K_M")
+    Reflect_Write = os.getenv("REFLECT_WRITE_MODEL", "qwen2.5:14b-instruct-q4_k_m")
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-EMBEDDING_MODEL = os.getenv("EMBED_MODEL")
+MAX_HISTORY = int(os.getenv("MAX_HISTORY", 30))
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_CTX_SIZE", 8192))
