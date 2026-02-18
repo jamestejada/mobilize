@@ -71,3 +71,6 @@ class Models:
 
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", 30))
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_CTX_SIZE", 8192))
+
+LOG_DIR = Path(os.getenv("LOG_DIRECTORY", "logs"))
+LOG_DIR.mkdir(exist_ok=True)

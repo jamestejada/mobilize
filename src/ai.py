@@ -2,21 +2,23 @@ import re
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from dataclasses import dataclass
-from typing import Callable, Dict, Awaitable, List, Tuple
+from dataclasses import dataclass, field
+from typing import Callable, Awaitable, List
 
-from pydantic_ai import Agent, AgentRunResult, ModelResponse
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.exceptions import UnexpectedModelBehavior, ModelHTTPError
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.ollama import OllamaProvider
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 
 from .settings import (
         Models,
         Prompts,
         OllamaEndpoints,
-        MAX_HISTORY,
         OLLAMA_NUM_CTX
     )
+from .chat_history import ChatHistoryManager
+from .source_registry import SourceRegistry, SourceDataBuilder
+from .ollama_transport import ollama_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -29,46 +31,66 @@ def strip_think_tags(text: str) -> str:
     return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
 
 
+#                      User Query
+#                           │
+#               ┌─────────────────────────┐
+#               │   Praetor.agent.run()   │
+#               │  (pydantic-ai tool loop)│
+#               └────────────┬────────────┘
+#                            │
+#               ┌────────────┴─────────────┐
+#               │                          │
+#         OSINT query                  Out-of-scope
+#               │                          │
+#               ▼                          ▼
+#     run_research(directive)       text response
+#               │
+#               ▼  ← can repeat if gaps found
+#     write_response(research)←─┐
+#               │               │
+#               ▼               │   (up to 3 iterations)
+#     review_response(draft)    │
+#               │        │      │
+#            APPROVED  feedback ┘
+#               │
+#               ▼
+#         text response (result.output)
+#     ├── strip_think_tags()
+#     ├── source_registry.substitute()
+#     └── update_chat(final)  → User Response
 
-#               ┌──────────────────────┐
-#               │   System Orchestrator│
-#               └─────────┬────────────┘
-#                         │
-#            ┌────────────┴──────────────┐
-#            │                           │
-#       ┌────────────────┐          ┌───────────────────┐
-#       │ Coordination   │◄────────►│  Reflection       │
-#       │ Agent (Praetor)│          │  Agent (Cogitator)│
-#       └──────┬─────────┘          └───────────────────┘
-#              │
-#        ┌─────┴───────────────┐
-#        │                     │
-#       ┌────────────┐   ┌────────────┐
-#       │ Researcher │   │ Report Gen │
-#       │ (Quaesitor)│   │ (Nuntius)  │
-#       └────────────┘   └────────────┘
 
 
 research_coordinate_model = OpenAIChatModel(
     model_name=Models.Research_Coordinate,
     provider=OllamaProvider(
-        base_url=str(OllamaEndpoints.API_ROOT)
+        base_url=str(OllamaEndpoints.API_ROOT),
+        http_client=ollama_http_client,
     )
 )
 reflect_write_model = OpenAIChatModel(
     model_name=Models.Reflect_Write,
     provider=OllamaProvider(
-        base_url=str(OllamaEndpoints.API_ROOT)
+        base_url=str(OllamaEndpoints.API_ROOT),
+        http_client=ollama_http_client,
     )
 )
 
-OLLAMA_MODEL_SETTINGS = {"extra_body": {"options": {"num_ctx": OLLAMA_NUM_CTX}}}
+# Agents that must emit valid JSON tool calls — keep deterministic
+OLLAMA_TOOL_SETTINGS = {
+    "extra_body": {"options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.1}}
+}
+
+# Writer only — prose benefits from slightly more variability
+OLLAMA_WRITE_SETTINGS = {
+    "extra_body": {"options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.3}}
+}
+
+# Mistral special-token leak detection (e.g. <SPECIAL_27>)
+_SPECIAL_TOKEN_RE = re.compile(r'<SPECIAL_\d+>')
+MAX_SPECIAL_RETRIES = 2
 
 def inject_date(agent: Agent) -> None:
-    # Is this actually the best way to do it?
-    # Maybe there should be a base class
-    # that contains the agent instructions
-    # for the current date.
     @agent.instructions
     def add_date() -> str:
         current_date = datetime.now(
@@ -77,66 +99,113 @@ def inject_date(agent: Agent) -> None:
         return f"Today's date is {current_date}"
 
 
+MAX_RESEARCH_CALLS = 3   # initial + 2 follow-ups
+MAX_WRITE_CALLS = 4      # initial + 3 revisions
+MAX_REVIEW_CALLS = 3
+
+
+@dataclass
+class CallCounter:
+    max_calls: int
+    count: int = 0
+
+    def calls_exhausted(self) -> bool:
+        """Increment the counter. Returns True if the limit has been exceeded."""
+        self.count += 1
+        return self.count > self.max_calls
+
+
 @dataclass
 class AgentDeps:
     update_chat: Callable[[str], Awaitable[None]]
+    user_input: str = ""
+    chat_id: int = 0
+    research_counter: CallCounter = field(
+            default_factory=lambda: CallCounter(MAX_RESEARCH_CALLS)
+        )
+    write_counter: CallCounter = field(
+            default_factory=lambda: CallCounter(MAX_WRITE_CALLS)
+        )
+    review_counter: CallCounter = field(
+            default_factory=lambda: CallCounter(MAX_REVIEW_CALLS)
+        )
 
 
 class Quaesitor:
     """Research Agent
     """
     def __init__(self):
-        # Import research tools
-        # Lazy import to avoid circular dependency
+        # Import research tools — lazy to avoid circular dependency
         from .tools import TOOLS
         self.agent = Agent(
             model=research_coordinate_model,
             deps_type=AgentDeps,
             instructions=Prompts.RESEARCHER,
-            tools=TOOLS
+            tools=TOOLS,
+            model_settings=OLLAMA_TOOL_SETTINGS,
+            retries=2,
         )
         inject_date(agent=self.agent)
 
-    async def research(
-                self,
-                directive: str,
-                update_chat: Callable[[str], Awaitable[None]]
-            ) -> AgentRunResult[str]:
-        deps = AgentDeps(update_chat=update_chat)
-        await update_chat("_Researching..._")
-        result = await self.agent.run(
-            user_prompt=f"Research Directives:\n{directive}",
-            deps=deps,
-            model_settings=OLLAMA_MODEL_SETTINGS
-        )
+    async def run(self, directive: str, deps: AgentDeps, usage):
+        """Run research, retrying if Mistral special tokens leak into output.
+
+        Returns None if the agent fails with an unrecoverable tool error.
+        """
+        total_attempts = MAX_SPECIAL_RETRIES + 1
+        for attempt in range(1, total_attempts + 1):
+            try:
+                result = await self.agent.run(
+                    user_prompt=f"Research Directives:\n{directive}",
+                    deps=deps,
+                    usage=usage,
+                    model_settings=OLLAMA_TOOL_SETTINGS,
+                )
+            except (UnexpectedModelBehavior, ModelHTTPError) as e:
+                logger.warning(f"Quaesitor failure (attempt {attempt}/{total_attempts}): {e}")
+                if attempt < total_attempts:
+                    continue
+                return None
+            if not _SPECIAL_TOKEN_RE.search(result.output):
+                return result
+            logger.warning(
+                f"Quaesitor special-token output (attempt {attempt}/{total_attempts}), retrying..."
+            )
         return result
 
 
 class Nuntius:
     """Report/Response generator
     """
+    _META_RE = re.compile(
+        r'\n+(?:[-–—]{2,}\s*\n+)?'          # optional horizontal rule
+        r'(?:[-–—]\s*)?'                      # optional leading dash
+        r'(?:Give_Final_Answer'
+        r'|Call confirmed'
+        r'|waiting on'
+        r'|write_response'
+        r'|run_research'
+        r'|review_response'
+        r')[^\n]*',
+        re.IGNORECASE,
+    )
+
     def __init__(self):
         self.agent = Agent(
             model=reflect_write_model,
             instructions=Prompts.WRITER
         )
         inject_date(agent=self.agent)
-    
-    async def generate(
-            self,
-            user_input: str,
-            research_findings: str,
-            tool_data: str,
-            update_chat: Callable[[str], Awaitable[None]]
-        ) -> str:
-        await update_chat("_Writing response..._")
+
+    async def write(self, user_input: str, research: str, usage) -> str:
+        """Write a sourced response from research findings."""
         result = await self.agent.run(
-            user_prompt=f"User Question: {user_input}\n\n"
-                + f"{tool_data}\n\n"
-                + f"Research Findings:\n{research_findings}",
-            model_settings=OLLAMA_MODEL_SETTINGS
+            user_prompt=f"User Question: {user_input}\n\n{research}",
+            usage=usage,
+            model_settings=OLLAMA_WRITE_SETTINGS,
         )
-        return strip_think_tags(result.output)
+        output = strip_think_tags(result.output)
+        return self._META_RE.sub('', output).strip()
 
 
 class Cogitator:
@@ -148,39 +217,50 @@ class Cogitator:
             instructions=Prompts.REFLECTION
         )
         inject_date(agent=self.agent)
-    
-    async def reflect(
-            self,
-            user_input: str,
-            draft_response: str
-        ) -> Tuple[bool, str]:
 
+    async def review(self, user_input: str, draft: str, usage) -> str:
+        """Review a draft response; returns 'APPROVED' or improvement feedback."""
         result = await self.agent.run(
-            user_prompt=f"Original Question: {user_input}\n\n"
-                + f"Draft Response:\n{draft_response}",
-            model_settings=OLLAMA_MODEL_SETTINGS
+            user_prompt=f"Original Question: {user_input}\n\nDraft Response:\n{draft}",
+            usage=usage,
+            model_settings=OLLAMA_TOOL_SETTINGS,
         )
-        feedback = strip_think_tags(result.output)
-        approved: bool = feedback.strip().upper().startswith("APPROVED")
-        return approved, feedback
+        return strip_think_tags(result.output)
 
 
 class Praetor:
     """Coordination Agent
     """
-    MAX_HISTORY = MAX_HISTORY
-
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.chat_histories: Dict[int, List[ModelMessage]] = {}
+        self.history = ChatHistoryManager()
         self._quaesitor: Quaesitor | None = None
         self._nuntius: Nuntius | None = None
         self._cogitator: Cogitator | None = None
+        self.source_builder = SourceDataBuilder()
+        self._registries: dict[int, SourceRegistry] = {}
         self.agent = Agent(
             model=research_coordinate_model,
             instructions=Prompts.COORDINATOR,
+            deps_type=AgentDeps,
+            output_type=str,
+            tools=[
+                self.run_research,
+                self.write_response,
+                self.review_response,
+            ]
         )
         inject_date(self.agent)
+
+    def _get_registry(self, chat_id: int) -> SourceRegistry:
+        if chat_id not in self._registries:
+            self._registries[chat_id] = SourceRegistry()
+        return self._registries[chat_id]
+
+    def clear(self, chat_id: int) -> None:
+        """Clear conversation history and source registry for a chat."""
+        self.history.clear(chat_id)
+        self._registries.pop(chat_id, None)
 
     @property
     def quaesitor(self) -> Quaesitor:
@@ -200,37 +280,54 @@ class Praetor:
             self._cogitator = Cogitator()
         return self._cogitator
 
-    def get_history(self, chat_id: int) -> List[ModelMessage]:
-        return self.chat_histories.get(chat_id, [])
+    async def run_research(self, ctx: RunContext[AgentDeps], directive: str) -> str:
+        """Researches the directive using OSINT tools.
 
-    def trim_history(self, messages: List[ModelMessage]) -> List[ModelMessage]:
-        if len(messages) <= self.MAX_HISTORY:
-            return messages
-        while messages and not isinstance(messages[0], ModelRequest):
-            self.logger.info(f"Context Removed: {messages.pop(0)}")
-        return messages[-self.MAX_HISTORY:]
-    
-    # Tools whose output is instructions to the researcher, not source data
-    INTERMEDIATE_TOOLS = {
-        "list_gov_rss_feeds",
-        "list_us_news_rss_feeds",
-        "list_world_news_rss_feeds"
-    }
+        Args:
+            directive (str): What to investigate and which tools to use.
 
-    def extract_tool_results(self, messages: List[ModelMessage]) -> str:
-        tool_results = []
-        for msg in messages:
-            if isinstance(msg, ModelRequest):
-                for part in msg.parts:
-                    if (isinstance(part, ToolReturnPart)
-                            and part.content
-                            and part.tool_name not in self.INTERMEDIATE_TOOLS):
-                        tool_results.append(
-                            f"[{part.tool_name}]:\n{part.content}"
-                        )
-        if not tool_results:
-            return ""
-        return "Source Data:\n" + "\n\n".join(tool_results)
+        Returns:
+            str: Research findings and source data for the writer.
+        """
+        if ctx.deps.research_counter.calls_exhausted():
+            return "Research limit reached. Proceed with findings gathered so far."
+        await ctx.deps.update_chat("_Researching..._")
+        result = await self.quaesitor.run(directive, ctx.deps, ctx.usage)
+        if result is None:
+            return "Research failed due to a repeated tool call error. Proceed with any findings gathered so far."
+        clean_output = _SPECIAL_TOKEN_RE.sub('', result.output).strip()
+        tool_data, _ = self.source_builder.build(
+            result.all_messages(), self._get_registry(ctx.deps.chat_id)
+        )
+        return f"{tool_data}\n\nResearch Findings:\n{clean_output}"
+
+    async def write_response(self, ctx: RunContext[AgentDeps], research: str) -> str:
+        """Writes a sourced intelligence report from research findings.
+
+        Args:
+            research (str): Combined source data and research findings from run_research.
+
+        Returns:
+            str: Draft response with [SOURCE_N] citation tags.
+        """
+        if ctx.deps.write_counter.calls_exhausted():
+            return "Writing limit reached. Use the most recent draft as the final answer."
+        await ctx.deps.update_chat("_Writing response..._")
+        return await self.nuntius.write(ctx.deps.user_input, research, ctx.usage)
+
+    async def review_response(self, ctx: RunContext[AgentDeps], draft: str) -> str:
+        """Reviews a draft response for quality and source compliance.
+
+        Args:
+            draft (str): The draft response to review.
+
+        Returns:
+            str: "APPROVED" if the draft is acceptable, or specific improvement feedback.
+        """
+        if ctx.deps.review_counter.calls_exhausted():
+            return "APPROVED"  # force acceptance once review limit is reached
+        await ctx.deps.update_chat("_Reviewing response quality..._")
+        return await self.cogitator.review(ctx.deps.user_input, draft, ctx.usage)
 
     async def handle_query(
                 self,
@@ -238,57 +335,19 @@ class Praetor:
                 chat_id: int,
                 update_chat: Callable[[str], Awaitable[None]]
             ):
-        # Step 1: Praetor generates research directive
-        await update_chat(f"_Thinking..._")
-        result = await self.agent.run(
-            user_prompt=user_input,
-            message_history=self.get_history(chat_id=chat_id),
-            model_settings=OLLAMA_MODEL_SETTINGS
-        )
-        directive = strip_think_tags(result.output)
-        print(f"Generated directive:\n{directive}")
-        self.chat_histories[chat_id] = self.trim_history(
-                result.all_messages()
+        await update_chat("_Thinking..._")
+        deps = AgentDeps(update_chat=update_chat, user_input=user_input, chat_id=chat_id)
+        try:
+            result = await self.agent.run(
+                user_prompt=user_input,
+                message_history=self.history.get(chat_id),
+                deps=deps,
+                model_settings=OLLAMA_TOOL_SETTINGS,
             )
-
-        # Step 2: Quaesitor researches
-        research_result = await self.quaesitor.research(
-            directive=directive,
-            update_chat=update_chat
-        )
-        findings = research_result.output
-        tool_data = self.extract_tool_results(
-                research_result.all_messages()
-            )
-
-        # Step 3: Nuntius writes report
-        draft = await self.nuntius.generate(
-            user_input=user_input,
-            research_findings=findings,
-            tool_data=tool_data,
-            update_chat=update_chat
-        )
-        print(f"Initial draft:\n{draft}")
-
-        # Step 4: Cogitator reflects (up to 3 iterations)
-        for i in range(3):
-            await update_chat("_Reviewing response quality..._")
-            approved, feedback = await self.cogitator.reflect(
-                user_input=user_input,
-                draft_response=draft
-            )
-            print(f"Reflection feedback: {feedback}")
-            if approved:
-                break
-            await update_chat(f"_Revision {i + 1}..._")
-            draft = await self.nuntius.generate(
-                user_input=user_input,
-                research_findings=f"{findings}\n\nReview Feedback:\n{feedback}",
-                tool_data=tool_data,
-                update_chat=update_chat
-            )
-            print(f"Revised draft:\n{draft}")
-
-        # Step 5: Deliver
-        final_response = draft.replace("**", "*").strip()
-        await update_chat(final_response)
+            self.history.update(chat_id, result.all_messages())
+            if result.output:
+                final = self._get_registry(chat_id).substitute(strip_think_tags(result.output))
+                await update_chat(final)
+        except (UnexpectedModelBehavior, ModelHTTPError) as e:
+            self.logger.warning(f"Praetor failure: {e}")
+            await update_chat("_Something went wrong. Please try again._")

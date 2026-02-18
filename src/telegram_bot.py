@@ -11,7 +11,9 @@ from .tools.mobilize import get_events
 from .tools.bsky import trending_topics
 from .ai import Praetor
 
-logging.basicConfig(level=logging.INFO)
+
+logger = logging.getLogger(__name__)
+
 
 bot = Bot(
     token=TelegramBotCredentials.TOKEN,
@@ -28,14 +30,23 @@ async def send_welcome(message: types.Message):
         "Hi! I'm your AI Powered OSINT Bot.\n"
         "\t- Use /protests <location> to get upcoming protests.\n"
         "\t- Use /trending to see current trending topics on Bluesky.\n"
-        "\nOtherwise, mention me @mention me in the group chat"
+        "\t- Use /clear to reset conversation context.\n"
+        "\nOtherwise, @mention me in the group chat"
         " and I'll try to help you with your questions!"
     )
+
+
+@dp.message(Command("clear"))
+async def clear_context(message: types.Message):
+    llm.clear(message.chat.id)
+    await message.reply("Context cleared.")
 
 
 def clean_markdown(text: str) -> str:
     """Cleans markdown formatting from text."""
     REPLACEMENTS = [
+        ("`", ''),
+        ('***', '*'),
         ('**', '*'),
         ('#', ''),
     ]
@@ -75,6 +86,11 @@ async def send_long_message(
 async def send_trending_topics(message: types.Message):
     await message.answer("Fetching trending topics on Bluesky...")
     topics = await trending_topics()
+    if not topics:
+        await message.answer("No trending topics found on Bluesky.")
+        return
+    # convert topics to strings
+    topics = "\n\n".join([str(topic) for topic in topics])
     await send_long_message(
         message=message,
         text=topics,
@@ -86,7 +102,10 @@ async def send_trending_topics(message: types.Message):
 async def send_events(message: types.Message, command: CommandObject):
     location = command.args
     if not location:
-        await message.reply("Please provide a location (zipcode, address, or city name). Usage: /events <location>")
+        await message.reply(
+            "Please provide a location (zipcode, address, or city name)."
+            " Usage: /events <location>"
+            )
         return
 
     await message.answer(

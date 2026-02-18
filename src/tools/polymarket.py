@@ -1,6 +1,7 @@
 import json
 import logging
-from dataclasses import dataclass, field
+from typing import List
+from pydantic import BaseModel, field_validator
 
 from pydantic_ai import RunContext
 
@@ -10,11 +11,10 @@ from .http_client import AsyncHTTPClient
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class PolymarketMarket:
+class PolymarketMarket(BaseModel):
     question: str
-    outcomes: list[str]
-    prices: list[float]
+    outcomes: List[str]
+    prices: List[float]
     volume: float = 0.0
 
     def __str__(self) -> str:
@@ -46,11 +46,14 @@ class PolymarketMarket:
         )
 
 
-@dataclass
-class PolymarketEvent:
+class PolymarketEvent(BaseModel):
     title: str
     slug: str
-    markets: list[PolymarketMarket] = field(default_factory=list)
+    markets: List[PolymarketMarket] = []
+
+    @property
+    def source_url(self) -> str:
+        return f"https://polymarket.com/event/{self.slug}" if self.slug else ""
 
     def __str__(self) -> str:
         lines = [f"Event: {self.title}"]
@@ -80,16 +83,19 @@ async def search_polymarket(
             ctx: RunContext[AgentDeps],
             query: str,
             limit: int = 5
-        ) -> str:
+        ) -> List[PolymarketEvent]:
     """Searches Polymarket for prediction markets related to a query.
     Returns betting odds that reflect crowd sentiment on the topic.
 
     Args:
-        query (str): The topic to search for (e.g. "tariffs", "recession", "election").
+        query (str): The topic to search for. Examples: "tariffs", "recession 2026", "election results"
         limit (int, optional): Max number of events to return. Defaults to 5.
 
     Returns:
-        str: Formatted prediction market data with betting odds.
+        List[PolymarketEvent]: List of prediction market events with betting odds.
+
+    Example:
+        search_polymarket(query="economic downturn", limit=3)
     """
     await ctx.deps.update_chat(f"_Searching Polymarket: {query}_")
     async with GammaClient() as client:
@@ -103,26 +109,31 @@ async def search_polymarket(
         )
     if data is None:
         logger.error(f"Failed to fetch Polymarket data for '{query}'")
-        return ""
+        return []
     events = [PolymarketEvent.from_api(e) for e in data.get("events", [])]
     if not events:
         logger.info(f"No active prediction markets found for '{query}'")
-        return ""
-    header = f"Polymarket prediction markets for '{query}':\n\n"
-    return header + "\n\n---------\n\n".join(str(e) for e in events)
+        return []
+    return events
 
 
 async def get_polymarket_event(
             ctx: RunContext[AgentDeps],
             slug: str
-        ) -> str:
+        ) -> PolymarketEvent | None:
     """Gets detailed information about a specific Polymarket event by its slug.
 
+    Typically used after search_polymarket to get full details on a specific event.
+
     Args:
-        slug (str): The event slug (URL identifier).
+        slug (str): The event slug from search results or URL. Example: "will-recession-occur-2026"
 
     Returns:
-        str: Detailed prediction market data for the event.
+        PolymarketEvent | None: The prediction market event or None if not found.
+
+    Example:
+        # Step 1: search_polymarket(query="recession") to find events
+        # Step 2: get_polymarket_event(slug="will-recession-occur-2026") for details
     """
     await ctx.deps.update_chat(f"_Fetching Polymarket event: {slug}_")
     async with GammaClient() as client:
@@ -132,10 +143,10 @@ async def get_polymarket_event(
         )
     if data is None:
         logger.error(f"Failed to fetch Polymarket event '{slug}'")
-        return ""
+        return None
     if not data:
         logger.info(f"No Polymarket event found with slug '{slug}'")
-        return ""
+        return None
     event_data = data[0] if isinstance(data, list) else data
     event = PolymarketEvent.from_api(event_data)
-    return str(event)
+    return event

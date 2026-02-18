@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 import logging
 
 from pydantic_ai import RunContext
@@ -33,7 +33,7 @@ async def get_protests_for_llm(
             ctx: RunContext[AgentDeps],
             location: int | str,
             max_distance: Optional[int] = 75
-        ) -> str:
+        ) -> List[Event]:
     """Searches for protests events near a given location
 
         Args:
@@ -45,7 +45,7 @@ async def get_protests_for_llm(
             max_distance (Optional[int], optional): max distance in miles. Defaults to 75.
 
         Returns:
-            str: Formatted string of events for LLM context.
+            List[Event]: List of protest events near the location.
     """
     logger.info(
         f"LLM Tool: get_protests_for_llm called with location={location}, max_distance={max_distance}"
@@ -54,11 +54,8 @@ async def get_protests_for_llm(
     events = await get_events(location=location, max_distance=max_distance)
     if not events:
         logger.info(f"No upcoming protest events found near {location}")
-        return ""
-    return (
-            f"Found {len(events)} protest events near {location}:\n\n"
-            + "------".join([event.llm_context for event in events])
-        )
+        return []
+    return events
 
 
 async def get_zipcode_from_location(

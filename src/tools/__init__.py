@@ -19,6 +19,7 @@ from src.tools.rss_feeds import (
     get_world_news_rss_feed
 )
 from src.tools.polymarket import search_polymarket, get_polymarket_event
+from src.tools.fetch_url import fetch_url
 
 
 TOOLS = [
@@ -37,4 +38,5 @@ TOOLS = [
     Tool(get_protests_for_llm, takes_ctx=True),
     Tool(search_polymarket, takes_ctx=True),
     Tool(get_polymarket_event, takes_ctx=True),
+    Tool(fetch_url, takes_ctx=True),
 ]

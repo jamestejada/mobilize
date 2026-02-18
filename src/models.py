@@ -1,9 +1,9 @@
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, List
 import logging
 
+from pydantic import BaseModel, field_validator, ConfigDict
 from dateutil.parser import parse as parse_date
 
 from src import settings
@@ -49,8 +49,7 @@ class EventType(Enum):
     OTHER = "OTHER"
 
 
-@dataclass
-class Sponsor:
+class Sponsor(BaseModel):
     id: int
     name: str
     slug: str
@@ -69,14 +68,12 @@ class Sponsor:
     race_type: Optional[str] = None
 
 
-@dataclass
-class Coordinates:
+class Coordinates(BaseModel):
     latitude: float
     longitude: float
 
 
-@dataclass
-class Location:
+class Location(BaseModel):
     venue: str
     address_lines: List[str]
     locality: str
@@ -88,27 +85,29 @@ class Location:
     state_leg_district: Optional[str] = None
     state_senate_district: Optional[str] = None
 
-    def __post_init__(self):
-        if isinstance(self.location, dict):
-            self.location = Coordinates(**self.location)
+    @field_validator('location', mode='before')
+    @classmethod
+    def coerce_location(cls, v):
+        if isinstance(v, dict):
+            return Coordinates(**v)
+        return v
 
 
-@dataclass
-class Timeslot:
+class Timeslot(BaseModel):
     id: int
     start_date: datetime
     end_date: datetime
     is_full: bool
     instructions: Optional[str] = None
 
-    def __post_init__(self):
-        if isinstance(self.start_date, int):
-            self.start_date = datetime.fromtimestamp(self.start_date)
-        if isinstance(self.end_date, int):
-            self.end_date = datetime.fromtimestamp(self.end_date)
+    @field_validator('start_date', 'end_date', mode='before')
+    @classmethod
+    def coerce_timestamps(cls, v):
+        if isinstance(v, int):
+            return datetime.fromtimestamp(v)
+        return v
 
-@dataclass
-class Event:
+class Event(BaseModel):
     id: int
     title: str
     summary: str
@@ -136,16 +135,45 @@ class Event:
     virtual_action_url: Optional[str] = None
     accessibility_notes: Optional[str] = None
 
-    def __post_init__(self):
-        if isinstance(self.event_type, str):
-            self.event_type = EventType(self.event_type)
-        if isinstance(self.sponsor, dict):
-            self.sponsor = Sponsor(**self.sponsor)
-        if isinstance(self.location, dict):
-            self.location = Location(**self.location)
-        if self.timeslots and isinstance(self.timeslots[0], dict):
-            self.timeslots = [Timeslot(**t) for t in self.timeslots]
-    
+    @field_validator('event_type', mode='before')
+    @classmethod
+    def coerce_event_type(cls, v):
+        if isinstance(v, str):
+            return EventType(v)
+        return v
+
+    @field_validator('sponsor', mode='before')
+    @classmethod
+    def coerce_sponsor(cls, v):
+        if isinstance(v, dict):
+            return Sponsor(**v)
+        return v
+
+    @field_validator('location', mode='before')
+    @classmethod
+    def coerce_location(cls, v):
+        if isinstance(v, dict):
+            return Location(**v)
+        return v
+
+    @field_validator('timeslots', mode='before')
+    @classmethod
+    def coerce_timeslots(cls, v):
+        if v and isinstance(v[0], dict):
+            return [Timeslot(**t) for t in v]
+        return v
+
+    @field_validator('tags', mode='before')
+    @classmethod
+    def coerce_tags(cls, v):
+        if v and isinstance(v[0], dict):
+            return [tag.get('name', '') for tag in v]
+        return v
+
+    @property
+    def source_url(self) -> str:
+        return self.browser_url
+
     @property
     def location_str(self) -> str:
         return ", ".join([
@@ -208,8 +236,7 @@ DATE_KEYS: List[str] = [
 ]
 
 
-@dataclass
-class RSSFeedItem:
+class RSSFeedItem(BaseModel):
     """Represents a single RSS feed entry."""
     title: str
     link: str
@@ -221,6 +248,10 @@ class RSSFeedItem:
     thumbnail_url: Optional[str] = None
     tags: Optional[List[str]] = None
     relevance_score: Optional[float] = 0.0
+
+    @property
+    def source_url(self) -> str:
+        return self.link
 
     def __str__(self):
         return "\n".join([

@@ -3,20 +3,23 @@ import logging
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException
 from pydantic_ai import RunContext
+from pydantic import BaseModel
 
-from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 
 from ..ai import AgentDeps
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class WebResult:
+class WebResult(BaseModel):
     title: str
     href: str
     body: str
+
+    @property
+    def source_url(self) -> str:
+        return self.href
 
     def __str__(self) -> str:
         return "\n".join([
@@ -26,15 +29,18 @@ class WebResult:
             ])
 
 
-async def search_web(ctx: RunContext[AgentDeps], query: str, num_results: int = 20) -> str:
-    """Performs a web search and returns summarized results.
+async def search_web(ctx: RunContext[AgentDeps], query: str, num_results: int = 20) -> List[WebResult]:
+    """Performs a web search and returns results as structured models.
 
     Args:
-        query (str): The search query.
+        query (str): The search query text. Example: "renewable energy policy 2026"
         num_results (int, optional): Number of search results to return. Defaults to 20.
 
     Returns:
-        str: A summary of the top search results.
+        List[WebResult]: List of web search results with title, URL, and body text.
+
+    Example:
+        search_web(query="artificial intelligence regulation", num_results=15)
     """
     await ctx.deps.update_chat(f"_Searching web for: {query}_")
     try:
@@ -43,22 +49,22 @@ async def search_web(ctx: RunContext[AgentDeps], query: str, num_results: int = 
         ]
     except DDGSException as e:
         logger.error(f"Web search failed for '{query}': {e}")
-        return ""
+        return []
 
-    return (
-            f"Web search results for '{query}':"
-            + "\n\n---------\n\n".join([str(result) for result in results])
-        )
+    return results
 
 
-@dataclass
-class NewsResult:
+class NewsResult(BaseModel):
     date: str
     title: str
     body: str
     url: str
     image: Optional[str] = None
     source: Optional[str] = None
+
+    @property
+    def source_url(self) -> str:
+        return self.url
 
     def __str__(self) -> str:
         return "\n".join([
@@ -71,15 +77,18 @@ class NewsResult:
             ])
 
 
-async def search_news(ctx: RunContext[AgentDeps], query: str, num_results: int = 20) -> str:
-    """Performs a news search and returns summarized results.
+async def search_news(ctx: RunContext[AgentDeps], query: str, num_results: int = 20) -> List[NewsResult]:
+    """Performs a news search and returns results as structured models.
 
     Args:
-        query (str): The search query.
+        query (str): The search query text. Example: "federal reserve interest rates"
         num_results (int, optional): Number of news results to return. Defaults to 20.
 
     Returns:
-        str: A summary of the top news results.
+        List[NewsResult]: List of news results with date, title, source, URL, and body.
+
+    Example:
+        search_news(query="supreme court decision", num_results=10)
     """
     await ctx.deps.update_chat(f"_Searching news for: {query}_")
     try:
@@ -88,8 +97,5 @@ async def search_news(ctx: RunContext[AgentDeps], query: str, num_results: int =
         ]
     except DDGSException as e:
         logger.error(f"News search failed for '{query}': {e}")
-        return ""
-    return (
-            f"News search results for '{query}':"
-            + "\n\n---------\n\n".join([str(result) for result in results])
-        )
+        return []
+    return results

@@ -42,19 +42,12 @@ async def saturate_feed(feed_name: str, feed: feedparser.FeedParserDict) -> List
         ]
 
 
-def create_string_of_feed_items(feed_items: List[RSSFeedItem]) -> str:
-    """Creates a string representation of all feeds."""
-    return "Here are results from the RSS feeds:" + '\n'.join(
-            str(item) for item in feed_items
-        )
-
-
-async def get_feed(feed_name: str, feeds_json: dict) -> str:
+async def get_feed(feed_name: str, feeds_json: dict) -> List[RSSFeedItem]:
     """Fetches and returns current items from a single RSS feed."""
     data = feeds_json.get(feed_name)
     if not data or not data.get("url"):
         logger.warning(f"RSS feed '{feed_name}' not found in config")
-        return ""
+        return []
     async with aiohttp.ClientSession() as session:
         feed_objects = await fetch_feed(
                 session=session,
@@ -63,7 +56,7 @@ async def get_feed(feed_name: str, feeds_json: dict) -> str:
             )
     if not feed_objects:
         logger.error(f"Failed to fetch RSS feed '{feed_name}'")
-        return ""
+        return []
     saturated_items: List[RSSFeedItem] = await saturate_feed(feed_name, feed_objects)
     current_items = [
             item for item in saturated_items
@@ -71,8 +64,8 @@ async def get_feed(feed_name: str, feeds_json: dict) -> str:
         ]
     if not current_items:
         logger.info(f"No current items in RSS feed '{feed_name}'")
-        return ""
-    return create_string_of_feed_items(current_items)
+        return []
+    return current_items
 
 
 async def list_rss_feeds(json_feeds: dict, feed_description: str):
@@ -88,9 +81,17 @@ async def list_rss_feeds(json_feeds: dict, feed_description: str):
 # Listing feeds for LLM use
 async def list_gov_rss_feeds(ctx: RunContext[AgentDeps]):
     """Lists all US Government RSS feeds being monitored.
-    
-    Use this tool to get a list of all US Government RSS feeds
-    so that you can select relevant feeds to query.
+
+    Use this tool FIRST to get available feed names, then use get_gov_rss_feed
+    with the exact feed name.
+
+    No parameters required.
+
+    Returns:
+        str: Formatted list of available US Government RSS feed names.
+
+    Example:
+        list_gov_rss_feeds()
     """
     await ctx.deps.update_chat("_Listing US Government RSS feeds_")
     return await list_rss_feeds(
@@ -101,9 +102,17 @@ async def list_gov_rss_feeds(ctx: RunContext[AgentDeps]):
 
 async def list_us_news_rss_feeds(ctx: RunContext[AgentDeps]):
     """Lists all US News RSS feeds being monitored.
-    
-    Use this tool to get a list of all US News RSS feeds
-    so that you can select relevant feeds to query.
+
+    Use this tool FIRST to get available feed names, then use get_us_news_rss_feed
+    with the exact feed name.
+
+    No parameters required.
+
+    Returns:
+        str: Formatted list of available US News RSS feed names.
+
+    Example:
+        list_us_news_rss_feeds()
     """
     await ctx.deps.update_chat("_Listing US News RSS feeds_")
     return await list_rss_feeds(
@@ -114,9 +123,17 @@ async def list_us_news_rss_feeds(ctx: RunContext[AgentDeps]):
 
 async def list_world_news_rss_feeds(ctx: RunContext[AgentDeps]):
     """Lists all World News RSS feeds being monitored.
-    
-    Use this tool to get a list of all World News RSS feeds
-    so that you can select relevant feeds to query.
+
+    Use this tool FIRST to get available feed names, then use get_world_news_rss_feed
+    with the exact feed name.
+
+    No parameters required.
+
+    Returns:
+        str: Formatted list of available World News RSS feed names.
+
+    Example:
+        list_world_news_rss_feeds()
     """
     await ctx.deps.update_chat("_Listing World News RSS feeds_")
     return await list_rss_feeds(
@@ -125,16 +142,22 @@ async def list_world_news_rss_feeds(ctx: RunContext[AgentDeps]):
     )
 
 
-async def get_gov_rss_feed(ctx: RunContext[AgentDeps], feed_name: str):
+async def get_gov_rss_feed(ctx: RunContext[AgentDeps], feed_name: str) -> List[RSSFeedItem]:
     """Fetches and returns current items from a single US Government RSS feed.
+
     This is for the United States Government ONLY. Use the other tools for
     news feeds. Only use feed names from the list_gov_rss_feeds tool.
 
-    Parameters:
-        feed_name: str - The name of the RSS feed to fetch. Use the
-            list_gov_rss_feeds tool to get a list of valid feed names.
+    Args:
+        feed_name (str): The exact name of the RSS feed to fetch. Use list_gov_rss_feeds
+            first to get valid feed names. Example: "White House" or "State Department"
+
     Returns:
-        str: A formatted string of current items from the specified RSS feed.
+        List[RSSFeedItem]: List of current items from the specified RSS feed.
+
+    Example:
+        # Step 1: list_gov_rss_feeds() to see available feeds
+        # Step 2: get_gov_rss_feed(feed_name="White House")
     """
     await ctx.deps.update_chat(f"_Fetching feeds for {feed_name}_")
     return await get_feed(
@@ -142,17 +165,22 @@ async def get_gov_rss_feed(ctx: RunContext[AgentDeps], feed_name: str):
             feeds_json=RSS.US_GOV_JSON
         )
 
-async def get_us_news_rss_feed(ctx: RunContext[AgentDeps], feed_name: str):
+async def get_us_news_rss_feed(ctx: RunContext[AgentDeps], feed_name: str) -> List[RSSFeedItem]:
     """Fetches and returns current items from a single US News RSS feed.
-    This is for US News ONLY. Use the other tools for government feeds 
-    and world news feeds. Only use feed names from the list_us_news_rss_feeds
-    tool.
 
-    Parameters:
-        feed_name: str - The name of the RSS feed to fetch. Use the
-            list_us_news_rss_feeds tool to get a list of valid feed names.
+    This is for US News ONLY. Use the other tools for government feeds
+    and world news feeds. Only use feed names from the list_us_news_rss_feeds tool.
+
+    Args:
+        feed_name (str): The exact name of the RSS feed to fetch. Use list_us_news_rss_feeds
+            first to get valid feed names. Example: "CNN Politics" or "NYT Politics"
+
     Returns:
-        str: A formatted string of current items from the specified RSS feed.
+        List[RSSFeedItem]: List of current items from the specified RSS feed.
+
+    Example:
+        # Step 1: list_us_news_rss_feeds() to see available feeds
+        # Step 2: get_us_news_rss_feed(feed_name="CNN Politics")
     """
     await ctx.deps.update_chat(f"_Fetching feeds for {feed_name}_")
     return await get_feed(
@@ -161,15 +189,21 @@ async def get_us_news_rss_feed(ctx: RunContext[AgentDeps], feed_name: str):
         )
 
 
-async def get_world_news_rss_feed(ctx: RunContext[AgentDeps], feed_name: str):
+async def get_world_news_rss_feed(ctx: RunContext[AgentDeps], feed_name: str) -> List[RSSFeedItem]:
     """Fetches and returns current items from a single World News RSS feed.
+
     Only use feed names from the list_world_news_rss_feeds tool.
 
-    Parameters:
-        feed_name: str - The name of the RSS feed to fetch. Use the
-            list_world_news_rss_feeds tool to get a list of valid feed names.
+    Args:
+        feed_name (str): The exact name of the RSS feed to fetch. Use list_world_news_rss_feeds
+            first to get valid feed names. Example: "BBC World" or "Al Jazeera"
+
     Returns:
-        str: A formatted string of current items from the specified RSS feed.
+        List[RSSFeedItem]: List of current items from the specified RSS feed.
+
+    Example:
+        # Step 1: list_world_news_rss_feeds() to see available feeds
+        # Step 2: get_world_news_rss_feed(feed_name="BBC World")
     """
     await ctx.deps.update_chat(f"_Fetching feeds for {feed_name}_")
     return await get_feed(
