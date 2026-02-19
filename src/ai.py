@@ -35,29 +35,23 @@ def strip_think_tags(text: str) -> str:
 #                           │
 #               ┌─────────────────────────┐
 #               │   Praetor.agent.run()   │
-#               │  (pydantic-ai tool loop)│
+#               │  (run_research tool)    │
 #               └────────────┬────────────┘
 #                            │
-#               ┌────────────┴─────────────┐
-#               │                          │
-#         OSINT query                  Out-of-scope
-#               │                          │
-#               ▼                          ▼
-#     run_research(directive)       text response
+#               ┌────────────┴──────────────────┐
+#               │ deps.research_findings?        │
+#              YES                              NO
+#               │                               │
+#               ▼                               ▼
+#     _write_and_review()            result.output delivered
+#     [always runs — Python]         (clarifications, out-of-scope)
 #               │
-#               ▼  ← can repeat if gaps found
-#     write_response(research)←─┐
-#               │               │
-#               ▼               │   (up to 3 iterations)
-#     review_response(draft)    │
-#               │        │      │
-#            APPROVED  feedback ┘
-#               │
-#               ▼
-#         text response (result.output)
-#     ├── strip_think_tags()
-#     ├── source_registry.substitute()
-#     └── update_chat(final)  → User Response
+#               ├── nuntius.write()
+#               ├── cogitator.review()  ←─┐
+#               │       │         │        │  (up to 3 iterations)
+#               │    APPROVED   feedback ──┘
+#               ├── source_registry.substitute()
+#               └── update_chat(final)  → User Response
 
 
 
@@ -100,8 +94,7 @@ def inject_date(agent: Agent) -> None:
 
 
 MAX_RESEARCH_CALLS = 3   # initial + 2 follow-ups
-MAX_WRITE_CALLS = 4      # initial + 3 revisions
-MAX_REVIEW_CALLS = 3
+MAX_REVIEW_CALLS = 3     # write + up to 2 revisions
 
 
 @dataclass
@@ -120,14 +113,9 @@ class AgentDeps:
     update_chat: Callable[[str], Awaitable[None]]
     user_input: str = ""
     chat_id: int = 0
+    research_findings: str = ""
     research_counter: CallCounter = field(
             default_factory=lambda: CallCounter(MAX_RESEARCH_CALLS)
-        )
-    write_counter: CallCounter = field(
-            default_factory=lambda: CallCounter(MAX_WRITE_CALLS)
-        )
-    review_counter: CallCounter = field(
-            default_factory=lambda: CallCounter(MAX_REVIEW_CALLS)
         )
 
 
@@ -147,7 +135,7 @@ class Quaesitor:
         )
         inject_date(agent=self.agent)
 
-    async def run(self, directive: str, deps: AgentDeps, usage):
+    async def run(self, directive: str, deps: AgentDeps):
         """Run research, retrying if Mistral special tokens leak into output.
 
         Returns None if the agent fails with an unrecoverable tool error.
@@ -158,7 +146,6 @@ class Quaesitor:
                 result = await self.agent.run(
                     user_prompt=f"Research Directives:\n{directive}",
                     deps=deps,
-                    usage=usage,
                     model_settings=OLLAMA_TOOL_SETTINGS,
                 )
             except (UnexpectedModelBehavior, ModelHTTPError) as e:
@@ -180,7 +167,8 @@ class Nuntius:
     _META_RE = re.compile(
         r'\n+(?:[-–—]{2,}\s*\n+)?'          # optional horizontal rule
         r'(?:[-–—]\s*)?'                      # optional leading dash
-        r'(?:Give_Final_Answer'
+        r'(?:give_final_answer'
+        r'|Give_Final_Answer'
         r'|Call confirmed'
         r'|waiting on'
         r'|write_response'
@@ -197,11 +185,10 @@ class Nuntius:
         )
         inject_date(agent=self.agent)
 
-    async def write(self, user_input: str, research: str, usage) -> str:
+    async def write(self, user_input: str, research: str) -> str:
         """Write a sourced response from research findings."""
         result = await self.agent.run(
             user_prompt=f"User Question: {user_input}\n\n{research}",
-            usage=usage,
             model_settings=OLLAMA_WRITE_SETTINGS,
         )
         output = strip_think_tags(result.output)
@@ -218,11 +205,10 @@ class Cogitator:
         )
         inject_date(agent=self.agent)
 
-    async def review(self, user_input: str, draft: str, usage) -> str:
+    async def review(self, user_input: str, draft: str) -> str:
         """Review a draft response; returns 'APPROVED' or improvement feedback."""
         result = await self.agent.run(
             user_prompt=f"Original Question: {user_input}\n\nDraft Response:\n{draft}",
-            usage=usage,
             model_settings=OLLAMA_TOOL_SETTINGS,
         )
         return strip_think_tags(result.output)
@@ -246,8 +232,6 @@ class Praetor:
             output_type=str,
             tools=[
                 self.run_research,
-                self.write_response,
-                self.review_response,
             ]
         )
         inject_date(self.agent)
@@ -292,42 +276,37 @@ class Praetor:
         if ctx.deps.research_counter.calls_exhausted():
             return "Research limit reached. Proceed with findings gathered so far."
         await ctx.deps.update_chat("_Researching..._")
-        result = await self.quaesitor.run(directive, ctx.deps, ctx.usage)
+        result = await self.quaesitor.run(directive, ctx.deps)
         if result is None:
             return "Research failed due to a repeated tool call error. Proceed with any findings gathered so far."
         clean_output = _SPECIAL_TOKEN_RE.sub('', result.output).strip()
         tool_data, _ = self.source_builder.build(
             result.all_messages(), self._get_registry(ctx.deps.chat_id)
         )
-        return f"{tool_data}\n\nResearch Findings:\n{clean_output}"
+        ctx.deps.research_findings += f"\n\n{tool_data}\n\nResearch Findings:\n{clean_output}"
+        return "Research complete. Call run_research again if gaps remain, otherwise stop."
 
-    async def write_response(self, ctx: RunContext[AgentDeps], research: str) -> str:
-        """Writes a sourced intelligence report from research findings.
-
-        Args:
-            research (str): Combined source data and research findings from run_research.
-
-        Returns:
-            str: Draft response with [SOURCE_N] citation tags.
-        """
-        if ctx.deps.write_counter.calls_exhausted():
-            return "Writing limit reached. Use the most recent draft as the final answer."
-        await ctx.deps.update_chat("_Writing response..._")
-        return await self.nuntius.write(ctx.deps.user_input, research, ctx.usage)
-
-    async def review_response(self, ctx: RunContext[AgentDeps], draft: str) -> str:
-        """Reviews a draft response for quality and source compliance.
-
-        Args:
-            draft (str): The draft response to review.
-
-        Returns:
-            str: "APPROVED" if the draft is acceptable, or specific improvement feedback.
-        """
-        if ctx.deps.review_counter.calls_exhausted():
-            return "APPROVED"  # force acceptance once review limit is reached
-        await ctx.deps.update_chat("_Reviewing response quality..._")
-        return await self.cogitator.review(ctx.deps.user_input, draft, ctx.usage)
+    async def _write_and_review(
+                self,
+                user_input: str,
+                research: str,
+                chat_id: int,
+                update_chat,
+            ) -> str:
+        """Write, review, and return the final response text."""
+        await update_chat("_Writing response..._")
+        draft = await self.nuntius.write(user_input, research)
+        for _ in range(MAX_REVIEW_CALLS):
+            await update_chat("_Reviewing..._")
+            feedback = await self.cogitator.review(user_input, draft)
+            if "APPROVED" in feedback.upper():
+                break
+            await update_chat("_Revising..._")
+            draft = await self.nuntius.write(
+                user_input,
+                f"{research}\n\nPrevious Draft:\n{draft}\n\nReviewer Feedback:\n{feedback}",
+            )
+        return self._get_registry(chat_id).substitute(strip_think_tags(draft))
 
     async def handle_query(
                 self,
@@ -345,7 +324,14 @@ class Praetor:
                 model_settings=OLLAMA_TOOL_SETTINGS,
             )
             self.history.update(chat_id, result.all_messages())
-            if result.output:
+            if deps.research_findings:
+                # OSINT path — always goes through Nuntius+Cogitator
+                final = await self._write_and_review(
+                    user_input, deps.research_findings, chat_id, update_chat
+                )
+                await update_chat(final)
+            elif result.output:
+                # Direct path — clarifications, out-of-scope, simple answers
                 final = self._get_registry(chat_id).substitute(strip_think_tags(result.output))
                 await update_chat(final)
         except (UnexpectedModelBehavior, ModelHTTPError) as e:

@@ -27,10 +27,11 @@ llm = Praetor()
 @dp.message(Command("help"))
 async def send_welcome(message: types.Message):
     await message.reply(
-        "Hi! I'm your AI Powered OSINT Bot.\n"
+        "Hi! I'm your AI Powered OSINT Bot.\n\n"
         "\t- Use /protests <location> to get upcoming protests.\n"
         "\t- Use /trending to see current trending topics on Bluesky.\n"
-        "\t- Use /clear to reset conversation context.\n"
+        "\t- Use /clear to reset conversation context."
+        " Use this when switching topics or if I'm acting weird.\n"
         "\nOtherwise, @mention me in the group chat"
         " and I'll try to help you with your questions!"
     )

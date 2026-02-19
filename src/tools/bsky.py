@@ -143,7 +143,7 @@ async def search_bluesky_posts(
     Example:
         search_bluesky_posts(query="artificial intelligence", limit=20)
     """
-    await ctx.deps.update_chat("_Searching Bluesky Posts_")
+    await ctx.deps.update_chat(f"_Searching Bluesky Posts: {query}_")
     try:
         client = await bluesky_login()
         results = await client.app.bsky.feed.search_posts(
