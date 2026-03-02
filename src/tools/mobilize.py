@@ -5,6 +5,7 @@ from pydantic_ai import RunContext
 
 from ..models import Event, EventType
 from ..ai import AgentDeps
+from ..source_registry import SourceRegistry
 from ..settings import MobilizeEndpoints
 from .geocoding import location_to_zipcode
 from .http_client import AsyncHTTPClient
@@ -55,6 +56,7 @@ async def get_protests_for_llm(
     if not events:
         logger.info(f"No upcoming protest events found near {location}")
         return []
+    SourceRegistry.register_all(ctx.deps.source_registry, events)
     return events
 
 

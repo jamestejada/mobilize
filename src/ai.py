@@ -28,7 +28,10 @@ def strip_think_tags(text: str) -> str:
     """Remove <think>...</think> blocks from model output.
     This is needed for qwen models.
     """
-    return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
+    text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
+    if '</think>' in text:
+        text = text.split('</think>', 1)[-1]
+    return text.strip()
 
 
 #                      User Query
@@ -45,6 +48,10 @@ def strip_think_tags(text: str) -> str:
 #               ▼                               ▼
 #     _write_and_review()            result.output delivered
 #     [always runs — Python]         (clarifications, out-of-scope)
+#               │
+#      run_research routes internally:
+#      ├── Explorator (web/social)
+#      └── Tabularius (data/events)
 #               │
 #               ├── nuntius.write()
 #               ├── cogitator.review()  ←─┐
@@ -80,8 +87,6 @@ OLLAMA_WRITE_SETTINGS = {
     "extra_body": {"options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.3}}
 }
 
-# Mistral special-token leak detection (e.g. <SPECIAL_27>)
-_SPECIAL_TOKEN_RE = re.compile(r'<SPECIAL_\d+>')
 MAX_SPECIAL_RETRIES = 2
 
 def inject_date(agent: Agent) -> None:
@@ -93,8 +98,24 @@ def inject_date(agent: Agent) -> None:
         return f"Today's date is {current_date}"
 
 
+def inject_tool_list(agent: Agent, tools) -> None:
+    """Append a dynamic tool list to agent instructions, generated from a tool list."""
+    lines = []
+    for tool in tools:
+        fn = tool.function
+        name = fn.__name__
+        first_line = (fn.__doc__ or "").strip().split("\n")[0].rstrip(".")
+        lines.append(f"- `{name}`: {first_line}")
+    tool_text = "\n".join(lines)
+
+    @agent.instructions
+    def _add_tool_list() -> str:
+        return f"## Available Tools\n{tool_text}"
+
+
 MAX_RESEARCH_CALLS = 3   # initial + 2 follow-ups
 MAX_REVIEW_CALLS = 3     # write + up to 2 revisions
+
 
 
 @dataclass
@@ -114,70 +135,99 @@ class AgentDeps:
     user_input: str = ""
     chat_id: int = 0
     research_findings: str = ""
-    research_counter: CallCounter = field(
+    web_research_counter: CallCounter = field(
             default_factory=lambda: CallCounter(MAX_RESEARCH_CALLS)
         )
+    data_research_counter: CallCounter = field(
+            default_factory=lambda: CallCounter(MAX_RESEARCH_CALLS)
+        )
+    
+    source_registry: SourceRegistry | None = None
 
 
-class Quaesitor:
-    """Research Agent
-    """
+class Explorator:
+    """Web and Social Media Research Agent"""
     def __init__(self):
-        # Import research tools — lazy to avoid circular dependency
-        from .tools import TOOLS
+        from .tools import EXPLORATOR_TOOLS, EXPLORATOR_ONLY_TOOLS
+        self.tool_names = {tool.function.__name__ for tool in EXPLORATOR_ONLY_TOOLS}
         self.agent = Agent(
             model=research_coordinate_model,
             deps_type=AgentDeps,
-            instructions=Prompts.RESEARCHER,
-            tools=TOOLS,
+            instructions=Prompts.EXPLORATOR,
+            tools=EXPLORATOR_TOOLS,
             model_settings=OLLAMA_TOOL_SETTINGS,
             retries=2,
         )
         inject_date(agent=self.agent)
+        inject_tool_list(self.agent, EXPLORATOR_TOOLS)
+
+    def should_handle(self, directive: str) -> bool:
+        return any(name in directive for name in self.tool_names)
 
     async def run(self, directive: str, deps: AgentDeps):
-        """Run research, retrying if Mistral special tokens leak into output.
-
+        """Run web/social research
         Returns None if the agent fails with an unrecoverable tool error.
         """
-        total_attempts = MAX_SPECIAL_RETRIES + 1
-        for attempt in range(1, total_attempts + 1):
+        while not deps.web_research_counter.calls_exhausted():
             try:
-                result = await self.agent.run(
-                    user_prompt=f"Research Directives:\n{directive}",
+                return await self.agent.run(
+                    user_prompt=(
+                        f"Research Directives:\n{directive}\n\n"
+                        f"IMPORTANT: Complete ONLY the above directives. "
+                        f"Do not research unrelated topics."
+                    ),
                     deps=deps,
                     model_settings=OLLAMA_TOOL_SETTINGS,
                 )
             except (UnexpectedModelBehavior, ModelHTTPError) as e:
-                logger.warning(f"Quaesitor failure (attempt {attempt}/{total_attempts}): {e}")
-                if attempt < total_attempts:
-                    continue
-                return None
-            if not _SPECIAL_TOKEN_RE.search(result.output):
-                return result
-            logger.warning(
-                f"Quaesitor special-token output (attempt {attempt}/{total_attempts}), retrying..."
-            )
-        return result
+                logger.warning(f"Explorator failure: {e}")
+        else:
+            return None
+
+
+class Tabularius:
+    """Structured Data Research Agent"""
+    def __init__(self):
+        from .tools import TABULARIUS_TOOLS, TABULARIUS_ONLY_TOOLS
+        self.tool_names = {tool.function.__name__ for tool in TABULARIUS_ONLY_TOOLS}
+        self.agent = Agent(
+            model=research_coordinate_model,
+            deps_type=AgentDeps,
+            instructions=Prompts.TABULARIUS,
+            tools=TABULARIUS_TOOLS,
+            model_settings=OLLAMA_TOOL_SETTINGS,
+            retries=2,
+        )
+        inject_date(agent=self.agent)
+        inject_tool_list(self.agent, TABULARIUS_TOOLS)
+
+    def should_handle(self, directive: str) -> bool:
+        return any(name in directive for name in self.tool_names)
+
+    async def run(self, directive: str, deps: AgentDeps):
+        """Run structured-data research.
+        Returns None if the agent fails with an unrecoverable tool error.
+        """
+        while not deps.data_research_counter.calls_exhausted():
+            try:
+                return await self.agent.run(
+                    user_prompt=(
+                        f"Research Directives:\n{directive}\n\n"
+                        f"IMPORTANT: Complete ONLY the above directives. "
+                        f"Do not research unrelated topics."
+                    ),
+                    deps=deps,
+                    model_settings=OLLAMA_TOOL_SETTINGS,
+                )
+            except (UnexpectedModelBehavior, ModelHTTPError) as e:
+                logger.warning(f"Tabularius failure: {e}")
+        else:
+            return None
 
 
 class Nuntius:
     """Report/Response generator
     """
-    _META_RE = re.compile(
-        r'\n+(?:[-–—]{2,}\s*\n+)?'          # optional horizontal rule
-        r'(?:[-–—]\s*)?'                      # optional leading dash
-        r'(?:give_final_answer'
-        r'|Give_Final_Answer'
-        r'|Call confirmed'
-        r'|waiting on'
-        r'|write_response'
-        r'|run_research'
-        r'|review_response'
-        r')[^\n]*',
-        re.IGNORECASE,
-    )
-
     def __init__(self):
         self.agent = Agent(
             model=reflect_write_model,
@@ -192,7 +242,7 @@ class Nuntius:
             model_settings=OLLAMA_WRITE_SETTINGS,
         )
         output = strip_think_tags(result.output)
-        return self._META_RE.sub('', output).strip()
+        return output
 
 
 class Cogitator:
@@ -220,11 +270,13 @@ class Praetor:
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.history = ChatHistoryManager()
-        self._quaesitor: Quaesitor | None = None
+        self._explorator: Explorator | None = None
+        self._tabularius: Tabularius | None = None
         self._nuntius: Nuntius | None = None
         self._cogitator: Cogitator | None = None
         self.source_builder = SourceDataBuilder()
         self._registries: dict[int, SourceRegistry] = {}
+        from .tools import ALL_RESEARCH_TOOLS
         self.agent = Agent(
             model=research_coordinate_model,
             instructions=Prompts.COORDINATOR,
@@ -232,9 +284,12 @@ class Praetor:
             output_type=str,
             tools=[
                 self.run_research,
-            ]
+                self.get_sources,
+            ],
+            retries=2,
         )
         inject_date(self.agent)
+        inject_tool_list(self.agent, ALL_RESEARCH_TOOLS)
 
     def _get_registry(self, chat_id: int) -> SourceRegistry:
         if chat_id not in self._registries:
@@ -247,10 +302,16 @@ class Praetor:
         self._registries.pop(chat_id, None)
 
     @property
-    def quaesitor(self) -> Quaesitor:
-        if not self._quaesitor:
-            self._quaesitor = Quaesitor()
-        return self._quaesitor
+    def explorator(self) -> Explorator:
+        if not self._explorator:
+            self._explorator = Explorator()
+        return self._explorator
+
+    @property
+    def tabularius(self) -> Tabularius:
+        if not self._tabularius:
+            self._tabularius = Tabularius()
+        return self._tabularius
 
     @property
     def nuntius(self) -> Nuntius:
@@ -273,18 +334,49 @@ class Praetor:
         Returns:
             str: Research findings and source data for the writer.
         """
-        if ctx.deps.research_counter.calls_exhausted():
-            return "Research limit reached. Proceed with findings gathered so far."
         await ctx.deps.update_chat("_Researching..._")
-        result = await self.quaesitor.run(directive, ctx.deps)
-        if result is None:
-            return "Research failed due to a repeated tool call error. Proceed with any findings gathered so far."
-        clean_output = _SPECIAL_TOKEN_RE.sub('', result.output).strip()
-        tool_data, _ = self.source_builder.build(
-            result.all_messages(), self._get_registry(ctx.deps.chat_id)
-        )
-        ctx.deps.research_findings += f"\n\n{tool_data}\n\nResearch Findings:\n{clean_output}"
+
+        use_explorator = self.explorator.should_handle(directive)
+        use_tabularius = self.tabularius.should_handle(directive)
+        if not use_explorator and not use_tabularius:
+            use_explorator = True  # fallback: default to web search
+
+        async def _run_agent(agent_runner, label: str) -> None:
+            result = await agent_runner.run(directive, ctx.deps)
+            if result is None:
+                logger.warning(f"{label} returned no result")
+                return
+            tool_data, _ = self.source_builder.build(
+                result.all_messages(), self._get_registry(ctx.deps.chat_id)
+            )
+            ctx.deps.research_findings += (
+                    f"\n\n{tool_data}\n\nResearch Findings "
+                    f"({label}):\n{result.output}"
+                )
+
+        if use_explorator:
+            await ctx.deps.update_chat("_Starting web/social research..._")
+            await _run_agent(self.explorator, "Web/Social")
+        if use_tabularius:
+            await ctx.deps.update_chat("_Starting data/events research..._")
+            await _run_agent(self.tabularius, "Data/Events")
+
         return "Research complete. Call run_research again if gaps remain, otherwise stop."
+
+    async def get_sources(self, ctx: RunContext[AgentDeps]) -> str:
+        """Returns sources already collected in this conversation.
+
+        Use this when the user asks a follow-up question about a topic already
+        researched. Review the returned sources to determine whether prior
+        research is sufficient or whether a new run_research call is needed
+        to capture recent developments. Cite [SOURCE_N] tags in your response;
+        they are automatically resolved to real links before delivery.
+
+        Returns:
+            str: List of [SOURCE_N] tags with titles, URLs, and short descriptions,
+                 or a message indicating no sources have been collected yet.
+        """
+        return self._get_registry(ctx.deps.chat_id).format_for_agent()
 
     async def _write_and_review(
                 self,
@@ -315,7 +407,12 @@ class Praetor:
                 update_chat: Callable[[str], Awaitable[None]]
             ):
         await update_chat("_Thinking..._")
-        deps = AgentDeps(update_chat=update_chat, user_input=user_input, chat_id=chat_id)
+        deps = AgentDeps(
+            update_chat=update_chat,
+            user_input=user_input,
+            chat_id=chat_id,
+            source_registry=self._get_registry(chat_id),
+        )
         try:
             result = await self.agent.run(
                 user_prompt=user_input,
@@ -323,6 +420,7 @@ class Praetor:
                 deps=deps,
                 model_settings=OLLAMA_TOOL_SETTINGS,
             )
+            logger.info(f"Praetor result: {result}")
             self.history.update(chat_id, result.all_messages())
             if deps.research_findings:
                 # OSINT path — always goes through Nuntius+Cogitator

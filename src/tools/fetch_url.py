@@ -23,7 +23,7 @@ class BrowserManager:
     """
 
     IDLE_TIMEOUT = 10 * 60  # seconds before closing idle browser
-    CHECK_INTERVAL = 60     # how often the watchdog checks for idleness
+    CHECK_INTERVAL = 60     # how often the watchman checks for idleness
 
     def __init__(self):
         self._playwright = None
@@ -35,12 +35,12 @@ class BrowserManager:
         if self._browser is None:
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(headless=True)
-            self._idle_task = asyncio.create_task(self._idle_watchdog())
+            self._idle_task = asyncio.create_task(self._idle_watchman())
             logger.info("Chromium launched")
         self._last_used = asyncio.get_event_loop().time()
         return self._browser
 
-    async def _idle_watchdog(self):
+    async def _idle_watchman(self):
         """Background task: close the browser after IDLE_TIMEOUT of inactivity."""
         while True:
             await asyncio.sleep(self.CHECK_INTERVAL)
@@ -119,25 +119,36 @@ def _extract(html: str, url: str) -> Optional[FetchedPage]:
     )
 
 
-async def fetch_url(ctx: RunContext[AgentDeps], url: str) -> Optional[FetchedPage]:
-    """Fetches a URL and extracts its main article text.
+async def fetch_url(ctx: RunContext[AgentDeps], source_key: str) -> Optional[FetchedPage]:
+    """Fetches full article text for a source already collected in this session.
 
-    Tries a fast HTTP fetch first; falls back to headless browser rendering
-    for JavaScript-heavy pages. Returns None if the page cannot be read.
+    Use the [SOURCE_N] tag shown in search results, or just the number.
+    Do NOT pass raw URLs — use the source tag instead.
 
-    Use on the 1-3 most relevant URLs from search results — not every result.
+    Use on the 1-3 most relevant results after search_news or search_web.
 
     Args:
-        url (str): Full URL of the article or page to fetch.
-                   Example: "https://apnews.com/article/some-article-slug"
+        source_key (str): The source tag from a search result.
+                          Accepts "SOURCE_3", "[SOURCE_3]", or just "3".
 
     Returns:
         FetchedPage with title and body text, or None if unreachable/unreadable.
 
     Example:
-        fetch_url(url="https://reuters.com/world/us/some-article")
+        fetch_url(source_key="SOURCE_3")
     """
-    await ctx.deps.update_chat(f"_Reading: {url}_")
+    registry = ctx.deps.source_registry
+    if registry is None:
+        logger.warning("fetch_url: no source registry available")
+        return None
+
+    source_item = registry.lookup_by_key(source_key)
+    if source_item is None:
+        logger.warning(f"fetch_url: source key {source_key!r} not in registry")
+        return None
+
+    url = source_item.url
+    await ctx.deps.update_chat(f"_Reading: {source_item.title or url}_")
     try:
         # Tier 1: trafilatura fetches and extracts directly (~0.5s)
         html = trafilatura.fetch_url(url)

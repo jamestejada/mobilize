@@ -6,6 +6,7 @@ from pydantic import BaseModel, field_validator
 from pydantic_ai import RunContext
 
 from ..ai import AgentDeps
+from ..source_registry import SourceRegistry
 from .http_client import AsyncHTTPClient
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class PolymarketEvent(BaseModel):
     title: str
     slug: str
     markets: List[PolymarketMarket] = []
+    tag: str = ""
 
     @property
     def source_url(self) -> str:
@@ -114,6 +116,7 @@ async def search_polymarket(
     if not events:
         logger.info(f"No active prediction markets found for '{query}'")
         return []
+    SourceRegistry.register_all(ctx.deps.source_registry, events)
     return events
 
 
@@ -121,9 +124,7 @@ async def get_polymarket_event(
             ctx: RunContext[AgentDeps],
             slug: str
         ) -> PolymarketEvent | None:
-    """Gets detailed information about a specific Polymarket event by its slug.
-
-    Typically used after search_polymarket to get full details on a specific event.
+    """Fetches full details of a Polymarket prediction market event by slug (use after search_polymarket).
 
     Args:
         slug (str): The event slug from search results or URL. Example: "will-recession-occur-2026"
@@ -149,4 +150,5 @@ async def get_polymarket_event(
         return None
     event_data = data[0] if isinstance(data, list) else data
     event = PolymarketEvent.from_api(event_data)
+    SourceRegistry.register_one(ctx.deps.source_registry, event)
     return event

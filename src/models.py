@@ -134,6 +134,7 @@ class Event(BaseModel):
     high_priority: Optional[bool] = None
     virtual_action_url: Optional[str] = None
     accessibility_notes: Optional[str] = None
+    tag: str = ""
 
     @field_validator('event_type', mode='before')
     @classmethod
@@ -248,6 +249,7 @@ class RSSFeedItem(BaseModel):
     thumbnail_url: Optional[str] = None
     tags: Optional[List[str]] = None
     relevance_score: Optional[float] = 0.0
+    tag: str = ""
 
     @property
     def source_url(self) -> str:

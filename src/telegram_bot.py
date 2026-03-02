@@ -1,7 +1,8 @@
 import logging
+import re
 from typing import Awaitable
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction, ChatType
 from aiogram.filters import CommandStart, Command, CommandObject
@@ -21,6 +22,7 @@ bot = Bot(
     )
 dp = Dispatcher()
 llm = Praetor()
+
 
 
 @dp.message(CommandStart())
@@ -44,7 +46,7 @@ async def clear_context(message: types.Message):
 
 
 def clean_markdown(text: str) -> str:
-    """Cleans markdown formatting from text."""
+    """Cleans markdown formatting for Telegram's legacy Markdown parser."""
     REPLACEMENTS = [
         ("`", ''),
         ('***', '*'),
@@ -56,6 +58,32 @@ def clean_markdown(text: str) -> str:
     return text
 
 
+def markdown_to_html(text: str) -> str:
+    """Convert markdown formatting to Telegram HTML."""
+    def escape(s: str) -> str:
+        return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    # Split on markdown links so URLs are handled separately from prose
+    parts = re.split(r'(\[[^\]]+\]\(https?://[^\)]+\))', text)
+    result = []
+    for part in parts:
+        m = re.fullmatch(r'\[([^\]]+)\]\((https?://[^\)]+)\)', part)
+        if m:
+            link_text = escape(m.group(1))
+            url = m.group(2).replace('&', '&amp;')
+            result.append(f'<a href="{url}">{link_text}</a>')
+        else:
+            part = escape(part)
+            part = re.sub(r'\*\*\*(.+?)\*\*\*', r'<b>\1</b>', part)
+            part = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', part)
+            part = re.sub(r'\*([^*\n]+)\*', r'<b>\1</b>', part)
+            part = re.sub(r'_([^_\n]+)_', r'<i>\1</i>', part)
+            part = re.sub(r'`([^`]+)`', r'<code>\1</code>', part)
+            part = re.sub(r'^#{1,6}\s+', '', part, flags=re.MULTILINE)
+            result.append(part)
+    return ''.join(result)
+
+
 async def send_long_message(
             message: types.Message,
             text: str,
@@ -63,24 +91,47 @@ async def send_long_message(
             chunk_size: int = 4000
         ):
     """Split long messages into chunks."""
-    for i in range(0, len(text), chunk_size):
-        chunk = clean_markdown(text[i:i + chunk_size])
+
+    async def send_chunk(chunk: str):
         try:
             await message.answer(
-                chunk,
+                clean_markdown(chunk),
                 parse_mode=ParseMode.MARKDOWN,
                 link_preview_options=types.LinkPreviewOptions(
                     is_disabled=disable_web_page_preview
                     )
                 )
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"Failed to send message with markdown: {e}. Retrying as HTML."
+            )
             await message.answer(
-                chunk,
-                parse_mode=None,
+                markdown_to_html(chunk),
+                parse_mode=ParseMode.HTML,
                 link_preview_options=types.LinkPreviewOptions(
                     is_disabled=disable_web_page_preview
+                    )
                 )
-            )
+
+    paragraphs_split = text.split('\n\n')
+    chunk = ""
+    for paragraph in paragraphs_split:
+        if len(paragraph) > chunk_size:
+            # send the current chun because we can't add anymore to it.
+            # then split the long paragraph directly into more chunks
+            if chunk:
+                await send_chunk(chunk)
+                chunk = ""
+            # If a single paragraph exceeds the chunk size, split it directly
+            for i in range(0, len(paragraph), chunk_size):
+                await send_chunk(paragraph[i:i + chunk_size])
+        elif len(chunk) + len(paragraph) > chunk_size:
+            await send_chunk(chunk)
+            chunk = paragraph + "\n\n"
+        else:
+            chunk += paragraph + "\n\n"
+    if chunk:
+        await send_chunk(chunk)
 
 
 @dp.message(Command("trending"))
@@ -184,6 +235,18 @@ async def independent_message(message: str):
         chat_id=TelegramBotCredentials.CHANNEL_ID,
         text=message,
     )
+
+
+# Handle message reactions
+# @dp.message_reaction()
+# async def handle_reaction_update(update: types.Update):
+#     # For simplicity, we just log the reaction. In a real implementation,
+#     # you might want to update the message or trigger some action based on the reaction.
+#     message_reaction_update = update
+#     logger.info(message_reaction_update.message_id)
+#     for reaction in message_reaction_update.new_reaction:
+#         logger.info(reaction.emoji)
+
 
 async def run_bot():
     await dp.start_polling(bot)

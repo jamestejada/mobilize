@@ -31,18 +31,17 @@ class RSS:
     FEED_DIR.mkdir(exist_ok=True)
 
     US_GOV = FEED_DIR.joinpath("gov_feeds.json")
-    US_NEWS = FEED_DIR.joinpath("usa_news_feeds.json")
     WORLD_NEWS = FEED_DIR.joinpath("world_news_feeds.json")
 
     US_GOV_JSON = json.loads(US_GOV.read_text())
-    US_NEWS_JSON = json.loads(US_NEWS.read_text())
     WORLD_NEWS_JSON = json.loads(WORLD_NEWS.read_text())
 
 
 class Prompts:
     COORDINATOR = PROMPT_PATH.joinpath("coordinator.md").read_text()
     REFLECTION = PROMPT_PATH.joinpath("reflection.md").read_text()
-    RESEARCHER = PROMPT_PATH.joinpath("researcher.md").read_text()
+    EXPLORATOR = PROMPT_PATH.joinpath("explorator.md").read_text()
+    TABULARIUS = PROMPT_PATH.joinpath("tabularius.md").read_text()
     WRITER = PROMPT_PATH.joinpath("writer.md").read_text()
 
 

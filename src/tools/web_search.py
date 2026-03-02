@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 from ..ai import AgentDeps
+from ..source_registry import SourceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ class WebResult(BaseModel):
     title: str
     href: str
     body: str
+    tag: str = ""
 
     @property
     def source_url(self) -> str:
@@ -51,6 +53,7 @@ async def search_web(ctx: RunContext[AgentDeps], query: str, num_results: int = 
         logger.error(f"Web search failed for '{query}': {e}")
         return []
 
+    SourceRegistry.register_all(ctx.deps.source_registry, results)
     return results
 
 
@@ -61,6 +64,7 @@ class NewsResult(BaseModel):
     url: str
     image: Optional[str] = None
     source: Optional[str] = None
+    tag: str = ""
 
     @property
     def source_url(self) -> str:
@@ -98,4 +102,6 @@ async def search_news(ctx: RunContext[AgentDeps], query: str, num_results: int =
     except DDGSException as e:
         logger.error(f"News search failed for '{query}': {e}")
         return []
+
+    SourceRegistry.register_all(ctx.deps.source_registry, results)
     return results

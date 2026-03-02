@@ -18,6 +18,7 @@ class SourceItem:
     url: str
     title: str = "Source"
     source_name: str = ""
+    description: str = ""
 
 
 @runtime_checkable
@@ -57,12 +58,14 @@ class SourceRegistry:
     def counter(self) -> int:
         return next(self._counter)
 
-    def register(self, url: str, title: str = "", source_name: str = "") -> str:
+    def register(self, url: str, title: str = "", source_name: str = "", description: str = "") -> str:
         """Register a URL and return its placeholder tag.
 
         Args:
             url: The URL to register
             title: Optional title for markdown link text
+            source_name: Optional outlet or author name
+            description: Optional short snippet for LLM relevance judgement
 
         Returns:
             The placeholder tag (e.g., "[SOURCE_1]")
@@ -85,7 +88,8 @@ class SourceRegistry:
 
         tag = f"[SOURCE_{self.counter}]"
 
-        item = SourceItem(url=url, title=title if title else "Source", source_name=source_name)
+        item = SourceItem(url=url, title=title if title else "Source",
+                          source_name=source_name, description=description)
         self._sources[tag] = item
         self._url_to_tag[url] = tag
 
@@ -152,6 +156,10 @@ class SourceRegistry:
         # Strip any remaining [SOURCE_N] tags not in registry (hallucinated or evicted)
         text = re.sub(r'\[SOURCE_\w+\]', '', text)
 
+        # Strip parenthetical source references the model wrote instead of tags
+        # e.g. (Source 51), (Sources 47, 49, 50), (Sources 57–64)
+        text = re.sub(r'\s*\(Sources?\s+[\d,\s–\-]+\)', '', text)
+
         return text
 
     @property
@@ -164,6 +172,84 @@ class SourceRegistry:
         """Returns the number of registered sources."""
         return self._counter
 
+    FORMAT_LIMIT = 25
+    FORMAT_DESC_LEN = 80
+
+    def lookup_by_key(self, source_key: str) -> 'Optional[SourceItem]':
+        """Look up a registered source by key in any common format.
+
+        Accepts: "SOURCE_3", "[SOURCE_3]", "3", "source_3" (case-insensitive).
+        """
+        key = source_key.strip().strip("[]").upper()
+        if not key.startswith("SOURCE_"):
+            key = f"SOURCE_{key}"
+        return self._sources.get(f"[{key}]")
+
+    @staticmethod
+    def register_sourceable(registry: 'SourceRegistry', item: Any) -> str:
+        """Register a Sourceable item into registry and return its [SOURCE_N] tag.
+
+        Extracts url, title, source_name, and description from common attribute
+        names automatically. Returns empty string if item is not Sourceable or
+        has no source_url.
+        """
+        if not isinstance(item, Sourceable) or not item.source_url:
+            return ""
+        title = getattr(item, 'title', '') or ''
+        source_name = (
+            getattr(item, 'source', '') or
+            getattr(item, 'source_name', '') or
+            getattr(item, 'author_handle', '') or ''
+        )
+        description = (
+            getattr(item, 'body', '') or
+            getattr(item, 'summary', '') or
+            getattr(item, 'text', '') or ''
+        )[:200]
+        return registry.register(
+            url=item.source_url,
+            title=title,
+            source_name=source_name,
+            description=description,
+        )
+
+    @staticmethod
+    def register_all(registry: 'Optional[SourceRegistry]', items: List[Any]) -> None:
+        """Register a list of items and set each item's tag field. None-safe."""
+        if registry is None:
+            return
+        for item in items:
+            tag = SourceRegistry.register_sourceable(registry, item)
+            if tag and hasattr(item, 'tag'):
+                item.tag = tag
+
+    @staticmethod
+    def register_one(registry: 'Optional[SourceRegistry]', item: Any) -> None:
+        """Register a single item and set its tag field. None-safe."""
+        if registry is None or item is None:
+            return
+        tag = SourceRegistry.register_sourceable(registry, item)
+        if tag and hasattr(item, 'tag'):
+            item.tag = tag
+
+    def format_for_agent(self) -> str:
+        """Return registered sources formatted for LLM citation and relevance judgement.
+
+        Returns the most recent FORMAT_LIMIT sources to stay within context limits.
+        """
+        if not self._sources:
+            return "No sources have been collected yet."
+        items = list(self._sources.items())
+        total = len(items)
+        shown = items[-self.FORMAT_LIMIT:]
+        lines = ["Sources collected in this conversation:"]
+        if total > self.FORMAT_LIMIT:
+            lines.append(f"  ({total - self.FORMAT_LIMIT} older sources not shown)")
+        for tag, item in shown:
+            desc = f" — {item.description[:self.FORMAT_DESC_LEN]}" if item.description else ""
+            lines.append(f"- {tag}: {item.title} ({item.url}){desc}")
+        return "\n".join(lines)
+
 
 class SourceDataBuilder:
     """Builds formatted source data from tool results with URL registry."""
@@ -171,7 +257,6 @@ class SourceDataBuilder:
     # Tools whose output is instructions to the researcher, not source data
     INTERMEDIATE_TOOLS = {
         "list_gov_rss_feeds",
-        "list_us_news_rss_feeds",
         "list_world_news_rss_feeds"
     }
 
@@ -237,29 +322,20 @@ class SourceDataBuilder:
         Returns:
             Formatted line or None if item is not Sourceable
         """
-        if not isinstance(item, Sourceable):
+        tag = SourceRegistry.register_sourceable(registry, item)
+        if not tag:
             return None
-        if not hasattr(item, 'source_url') or not item.source_url:
-            return None
-
-        title = getattr(item, 'title', '')
+        title = getattr(item, 'title', '') or ''
         summary = (
             getattr(item, 'body', '') or
             getattr(item, 'summary', '') or
-            getattr(item, 'text', '')
+            getattr(item, 'text', '') or ''
             )[:200]
         source_name = (
             getattr(item, 'source', '') or
             getattr(item, 'source_name', '') or
-            getattr(item, 'author_handle', '')
+            getattr(item, 'author_handle', '') or ''
             )
-
-        tag = registry.register(
-            url=item.source_url,
-            title=title if title else 'Source',
-            source_name=source_name,
-        )
-
         return f"- {tag} {title} [via {source_name}]: {summary}"
 
     @staticmethod

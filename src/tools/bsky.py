@@ -9,6 +9,7 @@ from typing import Optional, List
 
 from ..settings import BlueSkyCredentials
 from ..ai import AgentDeps
+from ..source_registry import SourceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class BlueskyPost(BaseModel):
     author_handle: str
     text: str
     post_id: str | int
+    tag: str = ""
 
     @property
     def source_url(self) -> str:
@@ -52,6 +54,7 @@ class BlueskyProfile(BaseModel):
     followers_count: int = 0
     follows_count: int = 0
     posts_count: int = 0
+    tag: str = ""
 
     @property
     def source_url(self) -> str:
@@ -73,6 +76,7 @@ class BlueskyTrendingTopic(BaseModel):
     link: str
     display_name: Optional[str] = None
     description: Optional[str] = None
+    tag: str = ""
 
     @property
     def source_url(self) -> str:
@@ -160,6 +164,7 @@ async def search_bluesky_posts(
         return []
 
     posts = [BlueskyPost.from_atproto(post) for post in results.posts]
+    SourceRegistry.register_all(ctx.deps.source_registry, posts)
     return posts
 
 
@@ -193,7 +198,7 @@ async def get_bluesky_profile(
         logger.warning(f"No Bluesky profile found for handle: {handle}")
         return None
 
-    return BlueskyProfile(
+    result = BlueskyProfile(
         handle=handle,
         display_name=profile.display_name or "",
         description=profile.description,
@@ -201,6 +206,8 @@ async def get_bluesky_profile(
         follows_count=profile.follows_count or 0,
         posts_count=profile.posts_count or 0
     )
+    SourceRegistry.register_one(ctx.deps.source_registry, result)
+    return result
 
 
 
@@ -232,6 +239,7 @@ async def get_author_feed(ctx: RunContext[AgentDeps], handle: str, limit: int = 
         return []
 
     posts = [BlueskyPost.from_atproto(item.post) for item in results.feed]
+    SourceRegistry.register_all(ctx.deps.source_registry, posts)
     return posts
 
 
@@ -278,4 +286,6 @@ async def get_trending_topics(ctx: RunContext[AgentDeps]) -> List[BlueskyTrendin
         get_trending_topics()
     """
     await ctx.deps.update_chat("_Checking Bluesky trending topics_")
-    return await trending_topics()
+    topics = await trending_topics()
+    SourceRegistry.register_all(ctx.deps.source_registry, topics)
+    return topics
