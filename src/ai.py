@@ -54,7 +54,7 @@ def strip_think_tags(text: str) -> str:
 #      └── Tabularius (data/events)
 #               │
 #               ├── nuntius.write()
-#               ├── cogitator.review()  ←─┐
+#               ├── cogitator.review()   ←─┐
 #               │       │         │        │  (up to 3 iterations)
 #               │    APPROVED   feedback ──┘
 #               ├── source_registry.substitute()
@@ -79,7 +79,7 @@ reflect_write_model = OpenAIChatModel(
 
 # Agents that must emit valid JSON tool calls — keep deterministic
 OLLAMA_TOOL_SETTINGS = {
-    "extra_body": {"options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.1}}
+    "extra_body": {"options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.1, "think": False}}
 }
 
 # Writer only — prose benefits from slightly more variability
@@ -98,14 +98,14 @@ def inject_date(agent: Agent) -> None:
         return f"Today's date is {current_date}"
 
 
-def inject_tool_list(agent: Agent, tools) -> None:
-    """Append a dynamic tool list to agent instructions, generated from a tool list."""
+def inject_tool_list(agent: Agent, toolset) -> None:
+    """Append a dynamic tool list to agent instructions, generated from a toolset."""
     lines = []
-    for tool in tools:
-        fn = tool.function
-        name = fn.__name__
-        first_line = (fn.__doc__ or "").strip().split("\n")[0].rstrip(".")
-        lines.append(f"- `{name}`: {first_line}")
+    for ts in toolset.toolsets:
+        for tool in ts.tools.values():
+            fn = tool.function
+            first_line = (fn.__doc__ or "").strip().split("\n")[0].rstrip(".")
+            lines.append(f"- `{fn.__name__}`: {first_line}")
     tool_text = "\n".join(lines)
 
     @agent.instructions
@@ -113,8 +113,9 @@ def inject_tool_list(agent: Agent, tools) -> None:
         return f"## Available Tools\n{tool_text}"
 
 
-MAX_RESEARCH_CALLS = 3   # initial + 2 follow-ups
+MAX_RESEARCH_CALLS = 5   # initial + 4 follow-ups
 MAX_REVIEW_CALLS = 3     # write + up to 2 revisions
+MAX_SPECIAL_RETRIES = 2     # retries for tool errors in Praetor before giving up
 
 
 
@@ -141,6 +142,9 @@ class AgentDeps:
     data_research_counter: CallCounter = field(
             default_factory=lambda: CallCounter(MAX_RESEARCH_CALLS)
         )
+    praetor_counter: CallCounter = field(
+            default_factory=lambda: CallCounter(MAX_SPECIAL_RETRIES)
+        )
     
     source_registry: SourceRegistry | None = None
 
@@ -148,18 +152,18 @@ class AgentDeps:
 class Explorator:
     """Web and Social Media Research Agent"""
     def __init__(self):
-        from .tools import EXPLORATOR_TOOLS, EXPLORATOR_ONLY_TOOLS
-        self.tool_names = {tool.function.__name__ for tool in EXPLORATOR_ONLY_TOOLS}
+        from .tools import EXPLORATOR_AGENT_TOOLSET, EXPLORATOR_TOOLSET
+        self.tool_names = EXPLORATOR_TOOLSET.tools
         self.agent = Agent(
             model=research_coordinate_model,
             deps_type=AgentDeps,
             instructions=Prompts.EXPLORATOR,
-            tools=EXPLORATOR_TOOLS,
+            toolsets=[EXPLORATOR_AGENT_TOOLSET],
             model_settings=OLLAMA_TOOL_SETTINGS,
             retries=2,
         )
         inject_date(agent=self.agent)
-        inject_tool_list(self.agent, EXPLORATOR_TOOLS)
+        inject_tool_list(self.agent, EXPLORATOR_AGENT_TOOLSET)
 
     def should_handle(self, directive: str) -> bool:
         return any(name in directive for name in self.tool_names)
@@ -188,18 +192,18 @@ class Explorator:
 class Tabularius:
     """Structured Data Research Agent"""
     def __init__(self):
-        from .tools import TABULARIUS_TOOLS, TABULARIUS_ONLY_TOOLS
-        self.tool_names = {tool.function.__name__ for tool in TABULARIUS_ONLY_TOOLS}
+        from .tools import TABULARIUS_AGENT_TOOLSET, TABULARIUS_TOOLSET
+        self.tool_names = TABULARIUS_TOOLSET.tools
         self.agent = Agent(
             model=research_coordinate_model,
             deps_type=AgentDeps,
             instructions=Prompts.TABULARIUS,
-            tools=TABULARIUS_TOOLS,
+            toolsets=[TABULARIUS_AGENT_TOOLSET],
             model_settings=OLLAMA_TOOL_SETTINGS,
             retries=2,
         )
         inject_date(agent=self.agent)
-        inject_tool_list(self.agent, TABULARIUS_TOOLS)
+        inject_tool_list(self.agent, TABULARIUS_AGENT_TOOLSET)
 
     def should_handle(self, directive: str) -> bool:
         return any(name in directive for name in self.tool_names)
@@ -276,7 +280,7 @@ class Praetor:
         self._cogitator: Cogitator | None = None
         self.source_builder = SourceDataBuilder()
         self._registries: dict[int, SourceRegistry] = {}
-        from .tools import ALL_RESEARCH_TOOLS
+        from .tools import ALL_RESEARCH_TOOLSET
         self.agent = Agent(
             model=research_coordinate_model,
             instructions=Prompts.COORDINATOR,
@@ -289,7 +293,7 @@ class Praetor:
             retries=2,
         )
         inject_date(self.agent)
-        inject_tool_list(self.agent, ALL_RESEARCH_TOOLS)
+        inject_tool_list(self.agent, ALL_RESEARCH_TOOLSET)
 
     def _get_registry(self, chat_id: int) -> SourceRegistry:
         if chat_id not in self._registries:
@@ -335,17 +339,21 @@ class Praetor:
             str: Research findings and source data for the writer.
         """
         await ctx.deps.update_chat("_Researching..._")
+        logger.debug(f"[Praetor→Research] directive:\n{directive}")
 
         use_explorator = self.explorator.should_handle(directive)
         use_tabularius = self.tabularius.should_handle(directive)
         if not use_explorator and not use_tabularius:
             use_explorator = True  # fallback: default to web search
 
+        summaries: list[str] = []
+
         async def _run_agent(agent_runner, label: str) -> None:
             result = await agent_runner.run(directive, ctx.deps)
             if result is None:
                 logger.warning(f"{label} returned no result")
                 return
+            logger.debug(f"[{label}] output:\n{result.output}")
             tool_data, _ = self.source_builder.build(
                 result.all_messages(), self._get_registry(ctx.deps.chat_id)
             )
@@ -353,6 +361,7 @@ class Praetor:
                     f"\n\n{tool_data}\n\nResearch Findings "
                     f"({label}):\n{result.output}"
                 )
+            summaries.append(f"[{label}]:\n{result.output}")
 
         if use_explorator:
             await ctx.deps.update_chat("_Starting web/social research..._")
@@ -361,7 +370,13 @@ class Praetor:
             await ctx.deps.update_chat("_Starting data/events research..._")
             await _run_agent(self.tabularius, "Data/Events")
 
-        return "Research complete. Call run_research again if gaps remain, otherwise stop."
+        summary = "\n\n".join(summaries) if summaries else "No findings returned."
+        return (
+            f"Research complete.\n\n{summary}\n\n"
+            "If the above reveals important leads (key people, orgs, breaking events) "
+            "not yet fully investigated, call run_research again with a targeted follow-up "
+            "directive. Otherwise stop."
+        )
 
     async def get_sources(self, ctx: RunContext[AgentDeps]) -> str:
         """Returns sources already collected in this conversation.
@@ -388,9 +403,11 @@ class Praetor:
         """Write, review, and return the final response text."""
         await update_chat("_Writing response..._")
         draft = await self.nuntius.write(user_input, research)
+        logger.debug(f"[Nuntius] draft:\n{draft}")
         for _ in range(MAX_REVIEW_CALLS):
             await update_chat("_Reviewing..._")
             feedback = await self.cogitator.review(user_input, draft)
+            logger.debug(f"[Cogitator] feedback:\n{feedback}")
             if "APPROVED" in feedback.upper():
                 break
             await update_chat("_Revising..._")
@@ -398,6 +415,7 @@ class Praetor:
                 user_input,
                 f"{research}\n\nPrevious Draft:\n{draft}\n\nReviewer Feedback:\n{feedback}",
             )
+            logger.debug(f"[Nuntius] revision:\n{draft}")
         return self._get_registry(chat_id).substitute(strip_think_tags(draft))
 
     async def handle_query(
@@ -413,25 +431,27 @@ class Praetor:
             chat_id=chat_id,
             source_registry=self._get_registry(chat_id),
         )
-        try:
-            result = await self.agent.run(
-                user_prompt=user_input,
-                message_history=self.history.get(chat_id),
-                deps=deps,
-                model_settings=OLLAMA_TOOL_SETTINGS,
-            )
-            logger.info(f"Praetor result: {result}")
-            self.history.update(chat_id, result.all_messages())
-            if deps.research_findings:
-                # OSINT path — always goes through Nuntius+Cogitator
-                final = await self._write_and_review(
-                    user_input, deps.research_findings, chat_id, update_chat
+        for attempt in range(MAX_SPECIAL_RETRIES + 1):
+            try:
+                result = await self.agent.run(
+                    user_prompt=user_input,
+                    message_history=self.history.get(chat_id),
+                    deps=deps,
+                    model_settings=OLLAMA_TOOL_SETTINGS,
                 )
-                await update_chat(final)
-            elif result.output:
-                # Direct path — clarifications, out-of-scope, simple answers
-                final = self._get_registry(chat_id).substitute(strip_think_tags(result.output))
-                await update_chat(final)
-        except (UnexpectedModelBehavior, ModelHTTPError) as e:
-            self.logger.warning(f"Praetor failure: {e}")
-            await update_chat("_Something went wrong. Please try again._")
+                logger.debug(f"[Praetor] output:\n{result.output}")
+                self.history.update(chat_id, result.all_messages())
+                if deps.research_findings:
+                    # OSINT path — always goes through Nuntius+Cogitator
+                    final = await self._write_and_review(
+                        user_input, deps.research_findings, chat_id, update_chat
+                    )
+                    await update_chat(final)
+                elif result.output:
+                    # Direct path — clarifications, out-of-scope, simple answers
+                    final = self._get_registry(chat_id).substitute(strip_think_tags(result.output))
+                    await update_chat(final)
+                return
+            except (UnexpectedModelBehavior, ModelHTTPError) as e:
+                self.logger.warning(f"Praetor failure (attempt {attempt + 1}): {e}", exc_info=True)
+        await update_chat("_Something went wrong. Please try again._")

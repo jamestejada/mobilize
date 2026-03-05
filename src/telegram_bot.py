@@ -15,7 +15,6 @@ from .ai import Praetor
 
 logger = logging.getLogger(__name__)
 
-
 bot = Bot(
     token=TelegramBotCredentials.TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
@@ -238,14 +237,14 @@ async def independent_message(message: str):
 
 
 # Handle message reactions
-# @dp.message_reaction()
-# async def handle_reaction_update(update: types.Update):
-#     # For simplicity, we just log the reaction. In a real implementation,
-#     # you might want to update the message or trigger some action based on the reaction.
-#     message_reaction_update = update
-#     logger.info(message_reaction_update.message_id)
-#     for reaction in message_reaction_update.new_reaction:
-#         logger.info(reaction.emoji)
+@dp.message_reaction()
+async def handle_reaction_update(update: types.Update):
+    # For simplicity, we just log the reaction. In a real implementation,
+    # you might want to update the message or trigger some action based on the reaction.
+    message_reaction_update = update
+    logger.info(message_reaction_update.message_id)
+    for reaction in message_reaction_update.new_reaction:
+        logger.info(reaction.emoji)
 
 
 async def run_bot():

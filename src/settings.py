@@ -64,6 +64,14 @@ class TelegramBotCredentials:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     CHANNEL_ID = int(os.getenv("BOT_CHANNEL_ID"))
 
+class FECCredentials:
+    API_KEY = os.getenv("FEC_API_KEY", "DEMO_KEY")  # DEMO_KEY works without registration
+
+
+class CongressCredentials:
+    API_KEY = os.getenv("CONGRESS_API_KEY", "")
+
+
 class Models:
     Research_Coordinate = os.getenv("RESEARCH_COORDINATE_MODEL", "qwen3:8b-q4_K_M")
     Reflect_Write = os.getenv("REFLECT_WRITE_MODEL", "qwen2.5:14b-instruct-q4_k_m")

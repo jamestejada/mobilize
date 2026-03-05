@@ -257,7 +257,8 @@ class SourceDataBuilder:
     # Tools whose output is instructions to the researcher, not source data
     INTERMEDIATE_TOOLS = {
         "list_gov_rss_feeds",
-        "list_world_news_rss_feeds"
+        "list_world_news_rss_feeds",
+        "search_wikipedia",   # context only — not a citable reference
     }
 
     def build(self, messages: List[Any], registry: Optional[SourceRegistry] = None) -> Tuple[str, SourceRegistry]:

@@ -1,11 +1,12 @@
 import logging
 import logging.handlers
+from datetime import datetime
 
 from .settings import LOG_DIR
 
 
 def setup_logging() -> None:
-    log_file = LOG_DIR / "bot.log"
+    log_file = LOG_DIR / f"bot{datetime.now().strftime('%Y%m%d')}.log"
 
     file_handler = logging.handlers.RotatingFileHandler(
         log_file,
@@ -16,7 +17,7 @@ def setup_logging() -> None:
     file_handler.setLevel(logging.DEBUG)
 
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.DEBUG)
 
     fmt = logging.Formatter(
         "%(asctime)s  [%(levelname)s]  %(name)s: %(message)s",
@@ -29,3 +30,7 @@ def setup_logging() -> None:
     root.setLevel(logging.DEBUG)
     root.addHandler(file_handler)
     root.addHandler(console_handler)
+
+    # Suppress verbose debug output from third-party libraries
+    for noisy in ("pydantic_ai", "httpx", "httpcore", "aiogram", "openai"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
