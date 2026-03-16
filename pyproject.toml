@@ -19,3 +19,8 @@ dependencies = [
     "trafilatura>=2.0,<3",
     "playwright>=1.40,<2",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

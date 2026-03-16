@@ -109,12 +109,12 @@ def _extract(html: str, url: str) -> Optional[FetchedPage]:
     )
     if not result:
         return None
-    body = (result.get("text", "") or "")[:MAX_BODY_CHARS]
+    body = (getattr(result, "text", "") or "")[:MAX_BODY_CHARS]
     if not body.strip():
         return None
     return FetchedPage(
         url=url,
-        title=result.get("title", "") or "",
+        title=getattr(result, "title", "") or "",
         body=body,
     )
 

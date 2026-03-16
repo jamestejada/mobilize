@@ -2,6 +2,8 @@ import logging
 import re
 from typing import Awaitable
 
+import asyncio
+
 from aiogram import Bot, Dispatcher, types, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction, ChatType
@@ -10,17 +12,21 @@ from aiogram.filters import CommandStart, Command, CommandObject
 from .settings import TelegramBotCredentials
 from .tools.mobilize import get_events
 from .tools.bsky import trending_topics
-from .ai import Praetor
+from .ai import Praetor, training_logger
+from .training_logger import emoji_to_rating
 
 
 logger = logging.getLogger(__name__)
 
 bot = Bot(
     token=TelegramBotCredentials.TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
 dp = Dispatcher()
 llm = Praetor()
+
+# Track running query tasks per chat so they can be cancelled
+_running_tasks: dict[int, asyncio.Task] = {}
 
 
 
@@ -29,12 +35,20 @@ llm = Praetor()
 async def send_welcome(message: types.Message):
     await message.reply(
         "Hi! I'm your AI Powered OSINT Bot.\n\n"
-        "\t- Use /protests <location> to get upcoming protests.\n"
-        "\t- Use /trending to see current trending topics on Bluesky.\n"
-        "\t- Use /clear to reset conversation context."
-        " Use this when switching topics or if I'm acting weird.\n"
+        "\t- Use /protests &lt;location&gt; to get upcoming protests.\n"
+        "\t- Use /trending to see current trending topics on Bluesky.\n\n"
         "\nOtherwise, @mention me in the group chat"
-        " and I'll try to help you with your questions!"
+        " and I'll try to help you with your questions!\n\n"
+        "Use these commands after your query to manage context and sources:\n"
+        "\t- Use /sources to see collected sources from the last query.\n"
+        "\t- Use /stop to cancel a running query.\n"
+        "\t- Use /clear to reset conversation context."
+        " Use this when switching topics or if I'm acting weird.\n\n"
+        "<b>Rate my responses</b> with emoji reactions:\n"
+        "\t🔥 💯 🥰 🤩 ❤ = Great response\n"
+        "\t👍 = Okay / mediocre\n"
+        "\t🤬 👎 = Bad response\n"
+        "Your ratings help improve future responses!"
     )
 
 
@@ -44,17 +58,23 @@ async def clear_context(message: types.Message):
     await message.reply("Context cleared.")
 
 
-def clean_markdown(text: str) -> str:
-    """Cleans markdown formatting for Telegram's legacy Markdown parser."""
-    REPLACEMENTS = [
-        ("`", ''),
-        ('***', '*'),
-        ('**', '*'),
-        ('#', ''),
-    ]
-    for old, new in REPLACEMENTS:
-        text = text.replace(old, new)
-    return text
+@dp.message(Command("sources"))
+async def send_sources(message: types.Message):
+    text = llm.get_sources_by_tg_command(message.chat.id)
+    if not text:
+        await message.reply("No sources available. Run a query first.")
+        return
+    await send_long_message(message=message, text=text, disable_web_page_preview=True)
+
+
+@dp.message(Command("stop"))
+async def stop_query(message: types.Message):
+    task = _running_tasks.get(message.chat.id)
+    if task and not task.done():
+        task.cancel()
+        await message.reply("_Stopping current query..._", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await message.reply("No query is running.")
 
 
 def markdown_to_html(text: str) -> str:
@@ -63,6 +83,7 @@ def markdown_to_html(text: str) -> str:
         return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
     # Split on markdown links so URLs are handled separately from prose
+    text = text.replace('`', '') # Remove backticks
     parts = re.split(r'(\[[^\]]+\]\(https?://[^\)]+\))', text)
     result = []
     for part in parts:
@@ -88,35 +109,25 @@ async def send_long_message(
             text: str,
             disable_web_page_preview: bool = False,
             chunk_size: int = 4000
-        ):
-    """Split long messages into chunks."""
+        ) -> list[int]:
+    """Split long messages into chunks. Returns list of sent message IDs."""
+    sent_ids: list[int] = []
 
     async def send_chunk(chunk: str):
-        try:
-            await message.answer(
-                clean_markdown(chunk),
-                parse_mode=ParseMode.MARKDOWN,
-                link_preview_options=types.LinkPreviewOptions(
-                    is_disabled=disable_web_page_preview
-                    )
+        msg = await message.answer(
+            markdown_to_html(chunk),
+            parse_mode=ParseMode.HTML,
+            link_preview_options=types.LinkPreviewOptions(
+                is_disabled=disable_web_page_preview
                 )
-        except Exception as e:
-            logger.warning(
-                f"Failed to send message with markdown: {e}. Retrying as HTML."
             )
-            await message.answer(
-                markdown_to_html(chunk),
-                parse_mode=ParseMode.HTML,
-                link_preview_options=types.LinkPreviewOptions(
-                    is_disabled=disable_web_page_preview
-                    )
-                )
+        sent_ids.append(msg.message_id)
 
     paragraphs_split = text.split('\n\n')
     chunk = ""
     for paragraph in paragraphs_split:
         if len(paragraph) > chunk_size:
-            # send the current chun because we can't add anymore to it.
+            # send the current chunk because we can't add anymore to it.
             # then split the long paragraph directly into more chunks
             if chunk:
                 await send_chunk(chunk)
@@ -131,6 +142,7 @@ async def send_long_message(
             chunk += paragraph + "\n\n"
     if chunk:
         await send_chunk(chunk)
+    return sent_ids
 
 
 @dp.message(Command("trending"))
@@ -160,7 +172,7 @@ async def send_events(message: types.Message, command: CommandObject):
         return
 
     await message.answer(
-        f"Fetching protest activity for: *{location}*..."
+        f"Fetching protest activity for: <b>{location}</b>..."
         )
     events = await get_events(location)
     if len(events) == 0:
@@ -183,11 +195,11 @@ async def regular_message(message: types.Message):
     if not message.text:
         # Ignore status updates or non-text messages
         return
-    
+
     if message.chat.type == ChatType.PRIVATE:
         await message.reply("Sorry, I only work in group chats to help reduce spam.")
         return
-    
+
     # only respond when @mentioned in group chats
     bot_info = await bot.get_me()
     bot_username = f"@{bot_info.username}"
@@ -201,31 +213,54 @@ async def regular_message(message: types.Message):
         )
     user_text= message.text.replace(bot_username, "").strip()
 
-    async def update_callback(text: str) -> Awaitable[None]:
-         await send_long_message(
+    last_message_ids: list[int] = []
+
+    async def update_callback(text: str) -> None:
+        nonlocal last_message_ids
+        last_message_ids = await send_long_message(
                 message=message,
                 text=text
                 )
-    # NOTE: Messaging will be handled from within the LLM
-    # class itself to provide real-time updates.
-    await llm.handle_query(
-        user_input=user_text,
-        chat_id=message.chat.id,
-        update_chat=update_callback
-    )
+
+    async def run_query():
+        nonlocal last_message_ids
+        iid, path = await llm.handle_query(
+            user_input=user_text,
+            chat_id=message.chat.id,
+            update_chat=update_callback
+        )
+        if iid and last_message_ids:
+            training_logger.associate_messages(
+                iid, message.chat.id, last_message_ids, path=path,
+            )
+
+    chat_id = message.chat.id
+    # Cancel any existing query in this chat
+    existing = _running_tasks.get(chat_id)
+    if existing and not existing.done():
+        existing.cancel()
+
+    task = asyncio.create_task(run_query())
+    _running_tasks[chat_id] = task
+    try:
+        await task
+    except asyncio.CancelledError:
+        await message.reply("_Query stopped._", parse_mode=ParseMode.MARKDOWN)
+    finally:
+        _running_tasks.pop(chat_id, None)
 
 
 @dp.startup()
 async def on_startup():
     await independent_message(
-        "_Oculis Apertis Bot is now online!_"
+        "<i>Oculis Apertis Bot is now online!</i>"
         )
 
 
 @dp.shutdown()
 async def on_shutdown():
     await independent_message(
-        "_Oculis Apertis Bot is shutting down._"
+        "<i>Oculis Apertis Bot is shutting down.</i>"
         )
 
 
@@ -236,15 +271,19 @@ async def independent_message(message: str):
     )
 
 
-# Handle message reactions
+# Handle message reactions for training data ratings
 @dp.message_reaction()
-async def handle_reaction_update(update: types.Update):
-    # For simplicity, we just log the reaction. In a real implementation,
-    # you might want to update the message or trigger some action based on the reaction.
-    message_reaction_update = update
-    logger.info(message_reaction_update.message_id)
-    for reaction in message_reaction_update.new_reaction:
-        logger.info(reaction.emoji)
+async def handle_reaction_update(event: types.MessageReactionUpdated):
+    for reaction in event.new_reaction:
+        emoji = getattr(reaction, "emoji", None)
+        if not emoji:
+            continue
+        rating = emoji_to_rating(emoji)
+        if rating:
+            training_logger.rate_by_message(
+                event.chat.id, event.message_id, rating
+            )
+            break
 
 
 async def run_bot():

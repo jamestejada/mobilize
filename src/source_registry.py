@@ -12,6 +12,19 @@ from typing import (
     )
 
 
+PRIMARY_DOMAINS = {
+    '.gov', '.mil', '.edu',
+    'courtlistener.com', 'congress.gov', 'fec.gov',
+    'supremecourt.gov', 'uscourts.gov',
+}
+
+
+def _classify_primary(url: str) -> bool:
+    """Heuristic: is this URL from an official/primary source?"""
+    url_lower = url.lower()
+    return any(domain in url_lower for domain in PRIMARY_DOMAINS)
+
+
 @dataclass
 class SourceItem:
     """A registered source with URL and title."""
@@ -19,6 +32,16 @@ class SourceItem:
     title: str = "Source"
     source_name: str = ""
     description: str = ""
+    corroboration_count: int = 1
+    is_primary: bool = False
+
+    @property
+    def confidence_level(self) -> str:
+        if self.corroboration_count >= 3 or (self.is_primary and self.corroboration_count >= 2):
+            return "HIGH"
+        elif self.corroboration_count >= 2 or self.is_primary:
+            return "MEDIUM"
+        return "LOW"
 
 
 @runtime_checkable
@@ -77,7 +100,9 @@ class SourceRegistry:
 
         # Deduplicate: return existing tag if URL already registered
         if url in self._url_to_tag:
-            return self._url_to_tag[url]
+            existing_tag = self._url_to_tag[url]
+            self._sources[existing_tag].corroboration_count += 1
+            return existing_tag
 
         # Evict oldest entry if at capacity
         if len(self._sources) >= self.MAX_SIZE:
@@ -89,7 +114,8 @@ class SourceRegistry:
         tag = f"[SOURCE_{self.counter}]"
 
         item = SourceItem(url=url, title=title if title else "Source",
-                          source_name=source_name, description=description)
+                          source_name=source_name, description=description,
+                          is_primary=_classify_primary(url))
         self._sources[tag] = item
         self._url_to_tag[url] = tag
 
@@ -99,9 +125,9 @@ class SourceRegistry:
     def _expand_compound_tags(text: str) -> str:
         """Expand [SOURCE_X, SOURCE_Y] into [SOURCE_X] [SOURCE_Y]."""
         def expand(match: re.Match) -> str:
-            tags = re.findall(r'SOURCE_\w+', match.group(1))
-            return ' '.join(f'[{t}]' for t in tags)
-        return re.sub(r'\[(SOURCE_\w+(?:\s*,\s*SOURCE_\w+)+)\]', expand, text)
+            tags = re.findall(r'SOURCE_\w+', match.group(1), re.IGNORECASE)
+            return ' '.join(f'[{t.upper()}]' for t in tags)
+        return re.sub(r'\[(SOURCE_\w+(?:\s*,\s*SOURCE_\w+)+)\]', expand, text, flags=re.IGNORECASE)
 
     @staticmethod
     def _normalize_bare_tags(text: str) -> str:
@@ -112,7 +138,9 @@ class SourceRegistry:
         Does not double-wrap already-bracketed tags.
         """
         # Match SOURCE_\w+ not already surrounded by [ ]
-        return re.sub(r'(?<!\[)(SOURCE_\w+)(?!\])', r'[\1]', text)
+        def _upper_bracket(m: re.Match) -> str:
+            return f'[{m.group(1).upper()}]'
+        return re.sub(r'(?<!\[)(SOURCE_\w+)(?!\])', _upper_bracket, text, flags=re.IGNORECASE)
 
     def substitute(self, text: str) -> str:
         """Replace all [SOURCE_N] placeholders with markdown links.
@@ -133,8 +161,14 @@ class SourceRegistry:
         # Normalize compound tags like [SOURCE_1, SOURCE_3] → [SOURCE_1] [SOURCE_3]
         text = self._expand_compound_tags(text)
 
+        # Fix unclosed brackets: [SOURCE_3 → [SOURCE_3]
+        text = re.sub(r'\[source_(\w+)\b(?!\])', lambda m: f'[SOURCE_{m.group(1).upper()}]', text, flags=re.IGNORECASE)
+
         # Normalize bare references like SOURCE_3 or *SOURCE_3* → [SOURCE_3]
         text = self._normalize_bare_tags(text)
+
+        # Normalize case: [Source_3], [source_3] → [SOURCE_3]
+        text = re.sub(r'\[source_(\w+)\]', lambda m: f'[SOURCE_{m.group(1)}]', text, flags=re.IGNORECASE)
 
         # Primary: replace registered [SOURCE_N] tags with markdown links
         for tag, item in self._sources.items():
@@ -154,13 +188,22 @@ class SourceRegistry:
                 text = text.replace(pattern, f"[{item.title}]({item.url})")
 
         # Strip any remaining [SOURCE_N] tags not in registry (hallucinated or evicted)
-        text = re.sub(r'\[SOURCE_\w+\]', '', text)
+        text = re.sub(r'\[SOURCE_\w+\]', '', text, flags=re.IGNORECASE)
 
         # Strip parenthetical source references the model wrote instead of tags
         # e.g. (Source 51), (Sources 47, 49, 50), (Sources 57–64)
         text = re.sub(r'\s*\(Sources?\s+[\d,\s–\-]+\)', '', text)
 
         return text
+
+    def format_for_user(self) -> str:
+        """Format sources for Telegram user display."""
+        if not self._sources:
+            return "No sources collected yet."
+        lines = [f"**{len(self._sources)} sources collected:**\n"]
+        for tag, item in self._sources.items():
+            lines.append(f"- [{item.title}]({item.url}) [{item.confidence_level}]")
+        return "\n".join(lines)
 
     @property
     def source_map(self) -> dict[str, str]:
@@ -247,7 +290,7 @@ class SourceRegistry:
             lines.append(f"  ({total - self.FORMAT_LIMIT} older sources not shown)")
         for tag, item in shown:
             desc = f" — {item.description[:self.FORMAT_DESC_LEN]}" if item.description else ""
-            lines.append(f"- {tag}: {item.title} ({item.url}){desc}")
+            lines.append(f"- {tag} [{item.confidence_level}]: {item.title} ({item.url}){desc}")
         return "\n".join(lines)
 
 
@@ -337,7 +380,9 @@ class SourceDataBuilder:
             getattr(item, 'source_name', '') or
             getattr(item, 'author_handle', '') or ''
             )
-        return f"- {tag} {title} [via {source_name}]: {summary}"
+        source_item = registry.lookup_by_key(tag)
+        confidence = f" [{source_item.confidence_level}]" if source_item else ""
+        return f"- {tag} {title} [via {source_name}]{confidence}: {summary}"
 
     @staticmethod
     def _is_relevant(item: Any, filter_text: str) -> bool:

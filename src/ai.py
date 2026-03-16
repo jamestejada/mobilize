@@ -1,4 +1,5 @@
 import re
+import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -14,51 +15,97 @@ from .settings import (
         Models,
         Prompts,
         OllamaEndpoints,
-        OLLAMA_NUM_CTX
+        OLLAMA_NUM_CTX,
+        LOG_DIR
     )
 from .chat_history import ChatHistoryManager
 from .source_registry import SourceRegistry, SourceDataBuilder
 from .ollama_transport import ollama_http_client
+from .training_logger import TrainingLogger
 
 logger = logging.getLogger(__name__)
 
 
 
 def strip_think_tags(text: str) -> str:
-    """Remove <think>...</think> blocks from model output.
-    This is needed for qwen models.
+    """Remove <think>...</think> and other model artifact tags from output.
+    Qwen models emit <think>, <thought>, <model>, and similar wrapper tags.
     """
     text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
     if '</think>' in text:
         text = text.split('</think>', 1)[-1]
+    # Strip <thought>...</thought> wrapper tags
+    text = re.sub(r'<thought>.*?</thought>\s*', '', text, flags=re.DOTALL)
+    # Unwrap <model>...</model> tags, preserving inner content (e.g. "APPROVED:")
+    text = re.sub(r'<model>(.*?)</model>', r'\1', text, flags=re.DOTALL)
+    # Remove any trailing garbage after endoftext/im_start tokens
+    text = re.sub(r'<\|endoftext\|>.*', '', text, flags=re.DOTALL)
+    text = re.sub(r'<\|im_start\|>.*', '', text, flags=re.DOTALL)
     return text.strip()
 
 
-#                      User Query
-#                           │
-#               ┌─────────────────────────┐
-#               │   Praetor.agent.run()   │
-#               │  (run_research tool)    │
-#               └────────────┬────────────┘
-#                            │
-#               ┌────────────┴──────────────────┐
-#               │ deps.research_findings?        │
-#              YES                              NO
-#               │                               │
-#               ▼                               ▼
-#     _write_and_review()            result.output delivered
-#     [always runs — Python]         (clarifications, out-of-scope)
-#               │
-#      run_research routes internally:
-#      ├── Explorator (web/social)
-#      └── Tabularius (data/events)
-#               │
-#               ├── nuntius.write()
-#               ├── cogitator.review()   ←─┐
-#               │       │         │        │  (up to 3 iterations)
-#               │    APPROVED   feedback ──┘
-#               ├── source_registry.substitute()
-#               └── update_chat(final)  → User Response
+#                          User Query
+#                               │
+#                  ┌────────────┴────────────┐
+#                  │        Praetor          │
+#                  │  (coordinator agent)    │
+#                  └────────────┬────────────┘
+#                               │
+#            ┌──────────────────┴───────────────────┐
+#            │ deps.research_findings?              │
+#           YES                                    NO
+#            │                                      │
+#            ▼                                      ▼
+#    run_research (parallel)              result.output delivered
+#    ┌──────────┬──────────┐              (clarifications, out-of-scope)
+#    │ asyncio.gather()    │
+#    ├── Explorator        │
+#    │   (web/social)      │
+#    └── Tabularius        │
+#        (data/events)     │
+#            │             │
+#            ▼             │
+#    Probator gap loop     │
+#    ┌─────────────┐       │
+#    │ analyze()   │       │
+#    │   │         │       │
+#    │ ADEQUATE  GAPS ─────┤
+#    │   │    (+ SEARCH:)  │
+#    │   │         │       │
+#    │   │  _run_followup  │
+#    │   │  _research()    │
+#    │   │  (parallel)     │
+#    │   │     │           │
+#    │   │  no new sources?│
+#    │   │     → break     │
+#    └───┴─────────────────┘
+#            │
+#            ▼
+#    _write_and_review()
+#            │
+#    ┌───────┴────────┐
+#    │ nuntius.write() │
+#    └───────┬────────┘
+#            │
+#    ┌───────┴─────────────┐
+#    │ cogitator.review()  │←──┐
+#    │       │             │   │ (up to 3 iterations)
+#    │    APPROVED         │   │
+#    │       │    IMPROVE  │   │
+#    │       │       │     │   │
+#    │       │    has SEARCH: section?
+#    │       │    YES    NO│   │
+#    │       │     │     └─┼───┘ (rewrite with feedback)
+#    │       │     ▼       │
+#    │       │  _run_followup_research()
+#    │       │  no new sources? → break
+#    │       │     │       │
+#    │       │  nuntius.write() (with new data)
+#    └───────┴─────┴───────┘
+#            │
+#    source_registry.substitute()
+#            │
+#    update_chat(final) → User Response
 
 
 
@@ -79,12 +126,25 @@ reflect_write_model = OpenAIChatModel(
 
 # Agents that must emit valid JSON tool calls — keep deterministic
 OLLAMA_TOOL_SETTINGS = {
-    "extra_body": {"options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.1, "think": False}}
+    "extra_body": {"options": {
+        "num_ctx": OLLAMA_NUM_CTX,
+        "temperature": 0.1,
+        "think": False,
+        "top_p": 0.7,
+        "repeat_penalty": 1.1,
+        "kv_cache_type": "q8_0",
+    }}
 }
 
 # Writer only — prose benefits from slightly more variability
 OLLAMA_WRITE_SETTINGS = {
-    "extra_body": {"options": {"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.3}}
+    "extra_body": {"options": {
+        "num_ctx": OLLAMA_NUM_CTX,
+        "temperature": 0.35,
+        "top_p": 0.9,
+        "repeat_penalty": 1.1,
+        "kv_cache_type": "q8_0",
+    }}
 }
 
 MAX_SPECIAL_RETRIES = 2
@@ -113,10 +173,12 @@ def inject_tool_list(agent: Agent, toolset) -> None:
         return f"## Available Tools\n{tool_text}"
 
 
+training_logger = TrainingLogger(LOG_DIR)
+
 MAX_RESEARCH_CALLS = 5   # initial + 4 follow-ups
 MAX_REVIEW_CALLS = 3     # write + up to 2 revisions
-MAX_SPECIAL_RETRIES = 2     # retries for tool errors in Praetor before giving up
-
+MAX_SPECIAL_RETRIES = 2  # retries for tool errors in Praetor before giving up
+MAX_GAP_RESEARCH_CALLS = 2  # max follow-up research rounds for gap-filling
 
 
 @dataclass
@@ -128,6 +190,32 @@ class CallCounter:
         """Increment the counter. Returns True if the limit has been exceeded."""
         self.count += 1
         return self.count > self.max_calls
+
+
+@dataclass
+class ResearchObjective:
+    description: str
+    tool_names: List[str]
+    completed: bool = False
+    findings_summary: str = ""
+
+
+@dataclass
+class ResearchPlan:
+    query: str
+    objectives: List[ResearchObjective] = field(default_factory=list)
+
+    def summary(self) -> str:
+        lines = [f"Research Plan for: {self.query}"]
+        for i, obj in enumerate(self.objectives, 1):
+            status = "DONE" if obj.completed else "PENDING"
+            lines.append(f"{i}. [{status}] {obj.description}")
+            if obj.findings_summary:
+                lines.append(f"   Findings: {obj.findings_summary[:150]}")
+        return "\n".join(lines)
+
+    def pending_objectives(self) -> List[ResearchObjective]:
+        return [o for o in self.objectives if not o.completed]
 
 
 @dataclass
@@ -145,8 +233,16 @@ class AgentDeps:
     praetor_counter: CallCounter = field(
             default_factory=lambda: CallCounter(MAX_SPECIAL_RETRIES)
         )
-    
+    gap_research_counter: CallCounter = field(
+            default_factory=lambda: CallCounter(MAX_GAP_RESEARCH_CALLS)
+        )
+    review_research_counter: CallCounter = field(
+            default_factory=lambda: CallCounter(MAX_GAP_RESEARCH_CALLS)
+        )
+
     source_registry: SourceRegistry | None = None
+    interaction_id: str = ""
+    research_plan: ResearchPlan | None = None
 
 
 class Explorator:
@@ -268,6 +364,28 @@ class Cogitator:
         return strip_think_tags(result.output)
 
 
+class Probator:
+    """Research gap analysis agent — evaluates research completeness."""
+    def __init__(self):
+        self.agent = Agent(
+            # model=reflect_write_model,
+            model=research_coordinate_model,
+            instructions=Prompts.GAP_ANALYSIS
+        )
+        inject_date(agent=self.agent)
+
+    async def analyze(self, user_input: str, research: str) -> str | None:
+        """Analyze research for gaps. Returns gap description or None if adequate."""
+        result = await self.agent.run(
+            user_prompt=f"Original Question: {user_input}\n\nResearch Findings:\n{research}",
+            model_settings=OLLAMA_TOOL_SETTINGS,
+        )
+        output = strip_think_tags(result.output)
+        if "ADEQUATE" in output.upper():
+            return None
+        return output
+
+
 class Praetor:
     """Coordination Agent
     """
@@ -278,6 +396,7 @@ class Praetor:
         self._tabularius: Tabularius | None = None
         self._nuntius: Nuntius | None = None
         self._cogitator: Cogitator | None = None
+        self._probator: Probator | None = None
         self.source_builder = SourceDataBuilder()
         self._registries: dict[int, SourceRegistry] = {}
         from .tools import ALL_RESEARCH_TOOLSET
@@ -289,6 +408,7 @@ class Praetor:
             tools=[
                 self.run_research,
                 self.get_sources,
+                self.create_research_plan,
             ],
             retries=2,
         )
@@ -299,6 +419,10 @@ class Praetor:
         if chat_id not in self._registries:
             self._registries[chat_id] = SourceRegistry()
         return self._registries[chat_id]
+
+    def get_sources_by_tg_command(self, chat_id: int) -> str:
+        """Return formatted source list for a chat."""
+        return self._get_registry(chat_id).format_for_user()
 
     def clear(self, chat_id: int) -> None:
         """Clear conversation history and source registry for a chat."""
@@ -329,6 +453,74 @@ class Praetor:
             self._cogitator = Cogitator()
         return self._cogitator
 
+    @property
+    def probator(self) -> Probator:
+        if not self._probator:
+            self._probator = Probator()
+        return self._probator
+
+    async def _run_followup_research(self, gap_description: str, deps: AgentDeps, chat_id: int) -> None:
+        """Run targeted follow-up research based on identified gaps."""
+        directive = (
+            f"OBJECTIVE: Fill identified gaps in prior research.\n"
+            f"{gap_description}\n"
+            f"CONTEXT: The user originally asked: {deps.user_input}\n"
+            f"Search for NEW information — do NOT call get_registered_sources."
+        )
+        logger.debug(f"[Praetor→Followup] directive:\n{directive}")
+
+        use_explorator = self.explorator.should_handle(directive)
+        use_tabularius = self.tabularius.should_handle(directive)
+        if not use_explorator and not use_tabularius:
+            use_explorator = True
+
+        tasks = []
+        if use_explorator:
+            tasks.append(self._run_single_agent(
+                self.explorator, 
+                "Web/Social-Followup",
+                directive,
+                deps,
+                chat_id
+            ))
+        if use_tabularius:
+            tasks.append(self._run_single_agent(
+                self.tabularius, 
+                "Data/Events-Followup",
+                directive,
+                deps,
+                chat_id
+            ))
+
+        results = await asyncio.gather(*tasks)
+        for r in results:
+            if r is None:
+                continue
+            label, tool_data, output = r
+            deps.research_findings += (
+                f"\n\nFollow-up {tool_data}\n\nFollow-up Findings "
+                f"({label}):\n{output}"
+            )
+
+    async def _run_single_agent(self, agent_runner, label, directive, deps, chat_id):
+        """Run a single research agent and return its results.
+
+        Returns (label, tool_data, output) or None if the agent failed.
+        """
+        result = await agent_runner.run(directive, deps)
+        if result is None:
+            logger.warning(f"{label} returned no result")
+            return None
+        logger.debug(f"[{label}] output:\n{result.output}")
+        tool_data, _ = self.source_builder.build(
+            result.all_messages(), self._get_registry(chat_id)
+        )
+        training_logger.record_agent(
+            deps.interaction_id, label, directive,
+            result.all_messages(), result.output or "",
+        )
+        return (label, tool_data, result.output)
+
     async def run_research(self, ctx: RunContext[AgentDeps], directive: str) -> str:
         """Researches the directive using OSINT tools.
 
@@ -346,33 +538,53 @@ class Praetor:
         if not use_explorator and not use_tabularius:
             use_explorator = True  # fallback: default to web search
 
-        summaries: list[str] = []
-
-        async def _run_agent(agent_runner, label: str) -> None:
-            result = await agent_runner.run(directive, ctx.deps)
-            if result is None:
-                logger.warning(f"{label} returned no result")
-                return
-            logger.debug(f"[{label}] output:\n{result.output}")
-            tool_data, _ = self.source_builder.build(
-                result.all_messages(), self._get_registry(ctx.deps.chat_id)
-            )
-            ctx.deps.research_findings += (
-                    f"\n\n{tool_data}\n\nResearch Findings "
-                    f"({label}):\n{result.output}"
-                )
-            summaries.append(f"[{label}]:\n{result.output}")
-
+        tasks = []
         if use_explorator:
-            await ctx.deps.update_chat("_Starting web/social research..._")
-            await _run_agent(self.explorator, "Web/Social")
+            tasks.append(self._run_single_agent(
+                self.explorator, "Web/Social", directive, ctx.deps, ctx.deps.chat_id
+            ))
         if use_tabularius:
-            await ctx.deps.update_chat("_Starting data/events research..._")
-            await _run_agent(self.tabularius, "Data/Events")
+            tasks.append(self._run_single_agent(
+                self.tabularius, "Data/Events", directive, ctx.deps, ctx.deps.chat_id
+            ))
+
+        summaries: list[str] = []
+        results = await asyncio.gather(*tasks)
+        for r in results:
+            if r is None:
+                continue
+            label, tool_data, output = r
+            ctx.deps.research_findings += (
+                f"\n\n{tool_data}\n\nResearch Findings "
+                f"({label}):\n{output}"
+            )
+            summaries.append(f"[{label}]:\n{output}")
+
+        # Update research plan progress if one exists
+        plan_status = ""
+        if ctx.deps.research_plan:
+            for obj in ctx.deps.research_plan.objectives:
+                if not obj.completed and (
+                    not obj.tool_names
+                    or any(tool in directive for tool in obj.tool_names)
+                ):
+                    obj.completed = True
+                    obj.findings_summary = (
+                        "\n\n".join(summaries)[:150] if summaries else ""
+                    )
+            pending = ctx.deps.research_plan.pending_objectives()
+            if pending:
+                pending_list = "\n".join(
+                    f"- {o.description}" for o in pending
+                )
+                plan_status = (
+                    f"\n\nPlan progress: {len(pending)} objectives remaining:\n"
+                    f"{pending_list}"
+                )
 
         summary = "\n\n".join(summaries) if summaries else "No findings returned."
         return (
-            f"Research complete.\n\n{summary}\n\n"
+            f"Research complete.\n\n{summary}{plan_status}\n\n"
             "If the above reveals important leads (key people, orgs, breaking events) "
             "not yet fully investigated, call run_research again with a targeted follow-up "
             "directive. Otherwise stop."
@@ -393,44 +605,94 @@ class Praetor:
         """
         return self._get_registry(ctx.deps.chat_id).format_for_agent()
 
-    async def _write_and_review(
-                self,
-                user_input: str,
-                research: str,
-                chat_id: int,
-                update_chat,
-            ) -> str:
+    async def create_research_plan(self, ctx: RunContext[AgentDeps], objectives: str) -> str:
+        """Creates a structured research plan before executing research.
+
+        Use this for complex queries with multiple angles to investigate.
+        For simple queries, skip this and call run_research directly.
+
+        Args:
+            objectives (str): Newline-separated list of research objectives.
+                Each line can optionally include tool names in parentheses.
+                Example: "1. (search_news, search_web) Investigate recent protests\\n2. (search_polymarket) Check prediction markets"
+
+        Returns:
+            str: The research plan summary showing all objectives.
+        """
+        plan = ResearchPlan(query=ctx.deps.user_input)
+        for line in objectives.strip().split("\n"):
+            line = line.strip().lstrip("0123456789.-) ")
+            if not line:
+                continue
+            tools: List[str] = []
+            if "(" in line and ")" in line:
+                tools_str = line[line.index("(") + 1:line.index(")")]
+                tools = [t.strip() for t in tools_str.split(",")]
+                line = line[line.index(")") + 1:].strip()
+            plan.objectives.append(ResearchObjective(description=line, tool_names=tools))
+        ctx.deps.research_plan = plan
+        logger.debug(f"[Praetor] Research plan created:\n{plan.summary()}")
+        return plan.summary()
+
+    async def _write_and_review(self, deps: AgentDeps) -> str:
         """Write, review, and return the final response text."""
-        await update_chat("_Writing response..._")
-        draft = await self.nuntius.write(user_input, research)
+        await deps.update_chat("_Writing response..._")
+        draft = await self.nuntius.write(deps.user_input, deps.research_findings)
         logger.debug(f"[Nuntius] draft:\n{draft}")
         for _ in range(MAX_REVIEW_CALLS):
-            await update_chat("_Reviewing..._")
-            feedback = await self.cogitator.review(user_input, draft)
+            await deps.update_chat("_Reviewing..._")
+            feedback = await self.cogitator.review(deps.user_input, draft)
             logger.debug(f"[Cogitator] feedback:\n{feedback}")
+            training_logger.record_nuntius(deps.interaction_id, draft, feedback)
             if "APPROVED" in feedback.upper():
                 break
-            await update_chat("_Revising..._")
-            draft = await self.nuntius.write(
-                user_input,
-                f"{research}\n\nPrevious Draft:\n{draft}\n\nReviewer Feedback:\n{feedback}",
-            )
+            if (
+                "SEARCH:" in feedback
+                and not deps.review_research_counter.calls_exhausted()
+                    ):
+                # IMPROVE feedback includes a SEARCH: section with tool calls —
+                # pass the full feedback as the followup directive.
+                logger.debug(f"[Cogitator] needs research:\n{feedback}")
+                await deps.update_chat("_Gathering additional information..._")
+                # Track whether followup found new sources; if not,
+                # skip the rewrite — no point rewriting with same data.
+                registry = self._get_registry(deps.chat_id)
+                sources_before = len(registry._sources)
+                await self._run_followup_research(
+                    feedback, deps, deps.chat_id
+                )
+                if len(registry._sources) == sources_before:
+                    logger.warning("Review followup added no new sources — skipping rewrite")
+                    break
+                await deps.update_chat("_Revising with new information..._")
+                draft = await self.nuntius.write(
+                    deps.user_input, deps.research_findings
+                )
+            else:
+                await deps.update_chat("_Revising..._")
+                draft = await self.nuntius.write(
+                    deps.user_input,
+                    f"{deps.research_findings}\n\nPrevious Draft:\n{draft}\n\nReviewer Feedback:\n{feedback}",
+                )
             logger.debug(f"[Nuntius] revision:\n{draft}")
-        return self._get_registry(chat_id).substitute(strip_think_tags(draft))
+        return self._get_registry(deps.chat_id).substitute(strip_think_tags(draft))
 
     async def handle_query(
                 self,
                 user_input: str,
                 chat_id: int,
                 update_chat: Callable[[str], Awaitable[None]]
-            ):
+            ) -> tuple[str, str]:
         await update_chat("_Thinking..._")
+        iid = training_logger.start(chat_id, user_input)
         deps = AgentDeps(
             update_chat=update_chat,
             user_input=user_input,
             chat_id=chat_id,
             source_registry=self._get_registry(chat_id),
+            interaction_id=iid,
         )
+        final = ""
         for attempt in range(MAX_SPECIAL_RETRIES + 1):
             try:
                 result = await self.agent.run(
@@ -443,15 +705,38 @@ class Praetor:
                 self.history.update(chat_id, result.all_messages())
                 if deps.research_findings:
                     # OSINT path — always goes through Nuntius+Cogitator
-                    final = await self._write_and_review(
-                        user_input, deps.research_findings, chat_id, update_chat
-                    )
+                    training_logger.set_path(iid, "osint")
+                    # Gap analysis: check for weak claims before writing
+                    registry = self._get_registry(chat_id)
+                    while not deps.gap_research_counter.calls_exhausted():
+                        await update_chat("_Analyzing research coverage..._")
+                        gaps = await self.probator.analyze(
+                            user_input, deps.research_findings
+                        )
+                        if gaps is None:
+                            break
+                        logger.debug(f"[Probator] gaps found:\n{gaps}")
+                        await update_chat("_Filling research gaps..._")
+                        # Track whether followup actually found new sources;
+                        # if not, stop looping to avoid wasting cycles on
+                        # agents that return nothing useful.
+                        sources_before = len(registry._sources)
+                        await self._run_followup_research(
+                            gaps, deps, chat_id
+                        )
+                        if len(registry._sources) == sources_before:
+                            logger.warning("Followup research added no new sources — stopping gap loop")
+                            break
+                    final = await self._write_and_review(deps)
                     await update_chat(final)
                 elif result.output:
                     # Direct path — clarifications, out-of-scope, simple answers
                     final = self._get_registry(chat_id).substitute(strip_think_tags(result.output))
                     await update_chat(final)
-                return
+                path = training_logger.finalize(iid, result.all_messages(), final)
+                return iid, path
             except (UnexpectedModelBehavior, ModelHTTPError) as e:
                 self.logger.warning(f"Praetor failure (attempt {attempt + 1}): {e}", exc_info=True)
+        path = training_logger.finalize(iid, [], final)
         await update_chat("_Something went wrong. Please try again._")
+        return iid, path

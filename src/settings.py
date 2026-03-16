@@ -43,6 +43,7 @@ class Prompts:
     EXPLORATOR = PROMPT_PATH.joinpath("explorator.md").read_text()
     TABULARIUS = PROMPT_PATH.joinpath("tabularius.md").read_text()
     WRITER = PROMPT_PATH.joinpath("writer.md").read_text()
+    GAP_ANALYSIS = PROMPT_PATH.joinpath("gap_analysis.md").read_text()
 
 
 class OllamaEndpoints:

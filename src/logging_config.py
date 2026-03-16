@@ -32,5 +32,11 @@ def setup_logging() -> None:
     root.addHandler(console_handler)
 
     # Suppress verbose debug output from third-party libraries
-    for noisy in ("pydantic_ai", "httpx", "httpcore", "aiogram", "openai"):
+    for noisy in (
+            "pydantic_ai",
+            "openai",
+            "hpack",
+            "rquest",
+            "cookie_store"
+        ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
