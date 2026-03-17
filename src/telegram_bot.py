@@ -7,6 +7,7 @@ import asyncio
 from aiogram import Bot, Dispatcher, types, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction, ChatType
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import CommandStart, Command, CommandObject
 
 from .settings import TelegramBotCredentials
@@ -17,6 +18,14 @@ from .training_logger import emoji_to_rating
 
 
 logger = logging.getLogger(__name__)
+
+
+def is_authorized(message: types.Message) -> bool:
+    if not TelegramBotCredentials.ALLOWED_USER_IDS:
+        return True     # Defaulting to True just for now
+                        # until I can find a good way to get user ids
+        # return False
+    return message.from_user is not None and message.from_user.id in TelegramBotCredentials.ALLOWED_USER_IDS
 
 bot = Bot(
     token=TelegramBotCredentials.TOKEN,
@@ -33,6 +42,8 @@ _running_tasks: dict[int, asyncio.Task] = {}
 @dp.message(CommandStart())
 @dp.message(Command("help"))
 async def send_welcome(message: types.Message):
+    if not is_authorized(message):
+        return
     await message.reply(
         "Hi! I'm your AI Powered OSINT Bot.\n\n"
         "\t- Use /protests &lt;location&gt; to get upcoming protests.\n"
@@ -54,12 +65,16 @@ async def send_welcome(message: types.Message):
 
 @dp.message(Command("clear"))
 async def clear_context(message: types.Message):
+    if not is_authorized(message):
+        return
     llm.clear(message.chat.id)
     await message.reply("Context cleared.")
 
 
 @dp.message(Command("sources"))
 async def send_sources(message: types.Message):
+    if not is_authorized(message):
+        return
     text = llm.get_sources_by_tg_command(message.chat.id)
     if not text:
         await message.reply("No sources available. Run a query first.")
@@ -69,6 +84,8 @@ async def send_sources(message: types.Message):
 
 @dp.message(Command("stop"))
 async def stop_query(message: types.Message):
+    if not is_authorized(message):
+        return
     task = _running_tasks.get(message.chat.id)
     if task and not task.done():
         task.cancel()
@@ -114,14 +131,23 @@ async def send_long_message(
     sent_ids: list[int] = []
 
     async def send_chunk(chunk: str):
-        msg = await message.answer(
-            markdown_to_html(chunk),
-            parse_mode=ParseMode.HTML,
-            link_preview_options=types.LinkPreviewOptions(
-                is_disabled=disable_web_page_preview
-                )
-            )
-        sent_ids.append(msg.message_id)
+        for attempt in range(3):
+            try:
+                msg = await message.answer(
+                    markdown_to_html(chunk),
+                    parse_mode=ParseMode.HTML,
+                    link_preview_options=types.LinkPreviewOptions(
+                        is_disabled=disable_web_page_preview
+                        )
+                    )
+                sent_ids.append(msg.message_id)
+                break
+            except TelegramNetworkError:
+                if attempt < 2:
+                    logger.warning("Telegram send failed, retrying in 5s (attempt %d/3)", attempt + 1)
+                    await asyncio.sleep(5)
+                else:
+                    logger.error("Failed to send message chunk after 3 attempts", exc_info=True)
 
     paragraphs_split = text.split('\n\n')
     chunk = ""
@@ -147,6 +173,8 @@ async def send_long_message(
 
 @dp.message(Command("trending"))
 async def send_trending_topics(message: types.Message):
+    if not is_authorized(message):
+        return
     await message.answer("Fetching trending topics on Bluesky...")
     topics = await trending_topics()
     if not topics:
@@ -163,6 +191,8 @@ async def send_trending_topics(message: types.Message):
 
 @dp.message(Command("protests"))
 async def send_events(message: types.Message, command: CommandObject):
+    if not is_authorized(message):
+        return
     location = command.args
     if not location:
         await message.reply(
@@ -193,11 +223,10 @@ async def send_events(message: types.Message, command: CommandObject):
 @dp.message()
 async def regular_message(message: types.Message):
     if not message.text:
-        # Ignore status updates or non-text messages
         return
-
+    if not is_authorized(message):
+        return
     if message.chat.type == ChatType.PRIVATE:
-        await message.reply("Sorry, I only work in group chats to help reduce spam.")
         return
 
     # only respond when @mentioned in group chats
@@ -212,6 +241,12 @@ async def regular_message(message: types.Message):
             request_timeout=10
         )
     user_text= message.text.replace(bot_username, "").strip()
+
+    # Include replied-to message content for context
+    reply = message.reply_to_message
+    if reply and reply.text:
+        reply_text = reply.text[:500]
+        user_text = f'[Replying to: "{reply_text}"]\n\n{user_text}'
 
     last_message_ids: list[int] = []
 
