@@ -4,7 +4,7 @@ from typing import Awaitable
 
 import asyncio
 
-from aiogram import Bot, Dispatcher, types, Router
+from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatAction, ChatType
 from aiogram.exceptions import TelegramNetworkError

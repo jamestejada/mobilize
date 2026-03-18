@@ -37,6 +37,9 @@ def setup_logging() -> None:
             "openai",
             "hpack",
             "rquest",
-            "cookie_store"
+            "cookie_store",
+            "httpcore.http11",
+            "httpcore.http2",
+            "primp.utils",
         ):
         logging.getLogger(noisy).setLevel(logging.WARNING)

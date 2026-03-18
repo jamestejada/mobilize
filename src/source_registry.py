@@ -1,6 +1,8 @@
 import re
+import asyncio
 import logging
-from dataclasses import dataclass
+import httpx
+from dataclasses import dataclass, field
 from typing import (
         Protocol,
         runtime_checkable,
@@ -25,6 +27,25 @@ def _classify_primary(url: str) -> bool:
     return any(domain in url_lower for domain in PRIMARY_DOMAINS)
 
 
+def _cosine_similarity(a: list, b: list) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+
+
+async def get_query_embedding(text: str) -> list:
+    """Fetch an embedding vector from Ollama mxbai-embed-large."""
+    from .settings import OllamaEndpoints
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            str(OllamaEndpoints.EMBEDDINGS),
+            json={"model": "mxbai-embed-large", "prompt": text},
+        )
+        resp.raise_for_status()
+        return resp.json()["embedding"]
+
+
 @dataclass
 class SourceItem:
     """A registered source with URL and title."""
@@ -34,6 +55,8 @@ class SourceItem:
     description: str = ""
     corroboration_count: int = 1
     is_primary: bool = False
+    embed_text: str = ""
+    embedding: list = field(default=None, repr=False)  # list[float] | None
 
     @property
     def confidence_level(self) -> str:
@@ -113,9 +136,12 @@ class SourceRegistry:
 
         tag = f"[SOURCE_{self.counter}]"
 
+        embed_text = description[:200] if description else (title or url)
+
         item = SourceItem(url=url, title=title if title else "Source",
                           source_name=source_name, description=description,
-                          is_primary=_classify_primary(url))
+                          is_primary=_classify_primary(url),
+                          embed_text=embed_text)
         self._sources[tag] = item
         self._url_to_tag[url] = tag
 
@@ -275,19 +301,49 @@ class SourceRegistry:
         if tag and hasattr(item, 'tag'):
             item.tag = tag
 
-    def format_for_agent(self) -> str:
-        """Return registered sources formatted for LLM citation and relevance judgement.
+    async def embed_sources(self) -> None:
+        """Compute and store embeddings for all sources not yet embedded."""
+        pending = [item for item in self._sources.values() if item.embedding is None]
+        if not pending:
+            return
 
-        Returns the most recent FORMAT_LIMIT sources to stay within context limits.
+        async def _embed_one(item: SourceItem) -> None:
+            try:
+                item.embedding = await get_query_embedding(item.embed_text)
+            except Exception as e:
+                self.logger.warning(f"Embedding failed for {item.url}: {e}")
+
+        await asyncio.gather(*[_embed_one(item) for item in pending])
+
+    def format_for_agent_semantic(self, query_embedding: list | None = None) -> str:
+        """Return top FORMAT_LIMIT sources ranked by semantic similarity to query_embedding.
+
+        If query_embedding is None or no embeddings have been computed, falls back
+        to recency order. Sources with embeddings are always ranked before unembedded ones.
         """
         if not self._sources:
             return "No sources have been collected yet."
+
         items = list(self._sources.items())
+
+        if query_embedding is not None:
+            scored, unscored = [], []
+            for tag, item in items:
+                if item.embedding is not None:
+                    score = _cosine_similarity(query_embedding, item.embedding)
+                    scored.append((score, tag, item))
+                else:
+                    unscored.append((tag, item))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            combined = [(tag, item) for _, tag, item in scored] + unscored
+        else:
+            combined = items
+
+        shown = combined[:self.FORMAT_LIMIT]
         total = len(items)
-        shown = items[-self.FORMAT_LIMIT:]
         lines = ["Sources collected in this conversation:"]
         if total > self.FORMAT_LIMIT:
-            lines.append(f"  ({total - self.FORMAT_LIMIT} older sources not shown)")
+            lines.append(f"  ({total - self.FORMAT_LIMIT} lower-relevance sources not shown)")
         for tag, item in shown:
             desc = f" — {item.description[:self.FORMAT_DESC_LEN]}" if item.description else ""
             lines.append(f"- {tag} [{item.confidence_level}]: {item.title} ({item.url}){desc}")

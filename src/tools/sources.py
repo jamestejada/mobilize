@@ -24,4 +24,4 @@ async def get_registered_sources(ctx: RunContext[AgentDeps]) -> str:
     """
     if ctx.deps.source_registry is None:
         return "No sources have been collected yet."
-    return ctx.deps.source_registry.format_for_agent()
+    return ctx.deps.source_registry.format_for_agent_semantic()

@@ -19,7 +19,7 @@ from .settings import (
         LOG_DIR
     )
 from .chat_history import ChatHistoryManager
-from .source_registry import SourceRegistry, SourceDataBuilder
+from .source_registry import SourceRegistry, SourceDataBuilder, get_query_embedding
 from .ollama_transport import ollama_http_client
 from .training_logger import TrainingLogger
 
@@ -112,14 +112,14 @@ def strip_think_tags(text: str) -> str:
 research_coordinate_model = OpenAIChatModel(
     model_name=Models.Research_Coordinate,
     provider=OllamaProvider(
-        base_url=str(OllamaEndpoints.API_ROOT),
+        base_url=str(OllamaEndpoints.CHAT),
         http_client=ollama_http_client,
     )
 )
 reflect_write_model = OpenAIChatModel(
     model_name=Models.Reflect_Write,
     provider=OllamaProvider(
-        base_url=str(OllamaEndpoints.API_ROOT),
+        base_url=str(OllamaEndpoints.CHAT),
         http_client=ollama_http_client,
     )
 )
@@ -135,6 +135,8 @@ OLLAMA_TOOL_SETTINGS = {
         "kv_cache_type": "q8_0",
     }}
 }
+
+MAX_FINDINGS_CHARS = 12000  # ~3K tokens; cap narrative summary accumulation
 
 # Writer only — prose benefits from slightly more variability
 OLLAMA_WRITE_SETTINGS = {
@@ -420,6 +422,13 @@ class Praetor:
             self._registries[chat_id] = SourceRegistry()
         return self._registries[chat_id]
 
+    async def _build_writing_context(self, deps: AgentDeps, chat_id: int, query_embedding: list | None = None) -> str:
+        """Build Nuntius input: semantically ranked sources + research summaries."""
+        registry = self._get_registry(chat_id)
+        await registry.embed_sources()
+        source_data = registry.format_for_agent_semantic(query_embedding)
+        return f"{source_data}\n\n{deps.research_findings}"
+
     def get_sources_by_tg_command(self, chat_id: int) -> str:
         """Return formatted source list for a chat."""
         return self._get_registry(chat_id).format_for_user()
@@ -496,11 +505,13 @@ class Praetor:
         for r in results:
             if r is None:
                 continue
-            label, tool_data, output = r
-            deps.research_findings += (
-                f"\n\nFollow-up {tool_data}\n\nFollow-up Findings "
-                f"({label}):\n{output}"
-            )
+            label, _, output = r
+            deps.research_findings += f"\n\nFollow-up Findings ({label}):\n{output}"
+            if len(deps.research_findings) > MAX_FINDINGS_CHARS:
+                deps.research_findings = (
+                    "...[earlier findings truncated]\n"
+                    + deps.research_findings[-MAX_FINDINGS_CHARS:]
+                )
 
     async def _run_single_agent(self, agent_runner, label, directive, deps, chat_id):
         """Run a single research agent and return its results.
@@ -553,11 +564,13 @@ class Praetor:
         for r in results:
             if r is None:
                 continue
-            label, tool_data, output = r
-            ctx.deps.research_findings += (
-                f"\n\n{tool_data}\n\nResearch Findings "
-                f"({label}):\n{output}"
-            )
+            label, _, output = r
+            ctx.deps.research_findings += f"\n\nResearch Findings ({label}):\n{output}"
+            if len(ctx.deps.research_findings) > MAX_FINDINGS_CHARS:
+                ctx.deps.research_findings = (
+                    "...[earlier findings truncated]\n"
+                    + ctx.deps.research_findings[-MAX_FINDINGS_CHARS:]
+                )
             summaries.append(f"[{label}]:\n{output}")
 
         # Update research plan progress if one exists
@@ -603,7 +616,7 @@ class Praetor:
             str: List of [SOURCE_N] tags with titles, URLs, and short descriptions,
                  or a message indicating no sources have been collected yet.
         """
-        return self._get_registry(ctx.deps.chat_id).format_for_agent()
+        return self._get_registry(ctx.deps.chat_id).format_for_agent_semantic()
 
     async def create_research_plan(self, ctx: RunContext[AgentDeps], objectives: str) -> str:
         """Creates a structured research plan before executing research.
@@ -637,7 +650,13 @@ class Praetor:
     async def _write_and_review(self, deps: AgentDeps) -> str:
         """Write, review, and return the final response text."""
         await deps.update_chat("_Writing response..._")
-        draft = await self.nuntius.write(deps.user_input, deps.research_findings)
+        try:
+            query_embedding = await get_query_embedding(deps.user_input)
+        except Exception as e:
+            logger.warning(f"Query embedding failed, using recency order: {e}")
+            query_embedding = None
+        writing_context = await self._build_writing_context(deps, deps.chat_id, query_embedding)
+        draft = await self.nuntius.write(deps.user_input, writing_context)
         logger.debug(f"[Nuntius] draft:\n{draft}")
         for _ in range(MAX_REVIEW_CALLS):
             await deps.update_chat("_Reviewing..._")
@@ -665,14 +684,14 @@ class Praetor:
                     logger.warning("Review followup added no new sources — skipping rewrite")
                     break
                 await deps.update_chat("_Revising with new information..._")
-                draft = await self.nuntius.write(
-                    deps.user_input, deps.research_findings
-                )
+                writing_context = await self._build_writing_context(deps, deps.chat_id, query_embedding)
+                draft = await self.nuntius.write(deps.user_input, writing_context)
             else:
                 await deps.update_chat("_Revising..._")
+                writing_context = await self._build_writing_context(deps, deps.chat_id, query_embedding)
                 draft = await self.nuntius.write(
                     deps.user_input,
-                    f"{deps.research_findings}\n\nPrevious Draft:\n{draft}\n\nReviewer Feedback:\n{feedback}",
+                    f"{writing_context}\n\nPrevious Draft:\n{draft}\n\nReviewer Feedback:\n{feedback}",
                 )
             logger.debug(f"[Nuntius] revision:\n{draft}")
         return self._get_registry(deps.chat_id).substitute(strip_think_tags(draft))

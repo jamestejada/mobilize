@@ -48,6 +48,7 @@ class Prompts:
 
 class OllamaEndpoints:
     API_ROOT = yarl.URL(os.getenv("OLLAMA_ROOT_URL"))
+    CHAT = API_ROOT.joinpath("v1")
     EMBEDDINGS = API_ROOT.joinpath("api/embeddings")
 
 
@@ -76,6 +77,10 @@ class FECCredentials:
 
 class CongressCredentials:
     API_KEY = os.getenv("CONGRESS_API_KEY", "")
+
+
+class CourtListenerCredentials:
+    API_KEY = os.getenv("COURTLISTENER_API_KEY", "")
 
 
 class Models:
