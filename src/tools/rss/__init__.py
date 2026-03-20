@@ -7,10 +7,10 @@ from pydantic_ai import RunContext
 
 from typing import List
 
-from ..models import RSSFeedItem
-from ..settings import RSS
-from ..ai import AgentDeps
-from ..source_registry import SourceRegistry
+from .models import RSSFeedItem
+from ...settings import RSS
+from ...ai import AgentDeps
+from ...source_registry import SourceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 #       proper User-Agent
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-}   
+}
 
 
 async def fetch_feed(
@@ -194,7 +194,7 @@ async def find_outdated_feeds(feeds_json: dict):
         ]
         if not any(entries):
             outdated_feeds.append(name)
- 
+
     if outdated_feeds:
         outdated_set = set(outdated_feeds)
         print("Outdated or inaccessible feeds detected:")
@@ -204,4 +204,3 @@ async def find_outdated_feeds(feeds_json: dict):
                 "url:" ,
                 feeds_json[feed_name]["url"]
             )
-

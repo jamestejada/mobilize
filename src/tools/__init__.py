@@ -9,7 +9,7 @@ from src.tools.bsky import (
     get_author_feed,
     get_trending_topics
     )
-from src.tools.rss_feeds import (
+from src.tools.rss import (
     list_gov_rss_feeds,
     get_gov_rss_feed,
     list_world_news_rss_feeds,
