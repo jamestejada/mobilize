@@ -8,19 +8,13 @@ from typing import Callable, Awaitable, List
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import UnexpectedModelBehavior, ModelHTTPError
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.ollama import OllamaProvider
-
 from .settings import (
-        Models,
         Prompts,
-        OllamaEndpoints,
-        OLLAMA_NUM_CTX,
         LOG_DIR
     )
+from .agent_settings import AgentsConfiguration
 from .chat_history import ChatHistoryManager
 from .source_registry import SourceRegistry, SourceDataBuilder, get_query_embedding
-from .ollama_transport import ollama_http_client
 from .training_logger import TrainingLogger
 
 logger = logging.getLogger(__name__)
@@ -109,45 +103,7 @@ def strip_think_tags(text: str) -> str:
 
 
 
-research_coordinate_model = OpenAIChatModel(
-    model_name=Models.Research_Coordinate,
-    provider=OllamaProvider(
-        base_url=str(OllamaEndpoints.CHAT),
-        http_client=ollama_http_client,
-    )
-)
-reflect_write_model = OpenAIChatModel(
-    model_name=Models.Reflect_Write,
-    provider=OllamaProvider(
-        base_url=str(OllamaEndpoints.CHAT),
-        http_client=ollama_http_client,
-    )
-)
-
-# Agents that must emit valid JSON tool calls — keep deterministic
-OLLAMA_TOOL_SETTINGS = {
-    "extra_body": {"options": {
-        "num_ctx": OLLAMA_NUM_CTX,
-        "temperature": 0.1,
-        "think": False,
-        "top_p": 0.7,
-        "repeat_penalty": 1.1,
-        "kv_cache_type": "q8_0",
-    }}
-}
-
 MAX_FINDINGS_CHARS = 12000  # ~3K tokens; cap narrative summary accumulation
-
-# Writer only — prose benefits from slightly more variability
-OLLAMA_WRITE_SETTINGS = {
-    "extra_body": {"options": {
-        "num_ctx": OLLAMA_NUM_CTX,
-        "temperature": 0.35,
-        "top_p": 0.9,
-        "repeat_penalty": 1.1,
-        "kv_cache_type": "q8_0",
-    }}
-}
 
 MAX_SPECIAL_RETRIES = 2
 
@@ -249,15 +205,15 @@ class AgentDeps:
 
 class Explorator:
     """Web and Social Media Research Agent"""
-    def __init__(self):
+    def __init__(self, model=None, instructions: str | None = None):
         from .tools import EXPLORATOR_AGENT_TOOLSET, EXPLORATOR_TOOLSET
         self.tool_names = EXPLORATOR_TOOLSET.tools
         self.agent = Agent(
-            model=research_coordinate_model,
+            model=model or AgentsConfiguration.EXPLORATOR.make_model(),
             deps_type=AgentDeps,
-            instructions=Prompts.EXPLORATOR,
+            instructions=instructions if instructions is not None else Prompts.EXPLORATOR,
             toolsets=[EXPLORATOR_AGENT_TOOLSET],
-            model_settings=OLLAMA_TOOL_SETTINGS,
+            model_settings=AgentsConfiguration.EXPLORATOR.model_settings,
             retries=2,
         )
         inject_date(agent=self.agent)
@@ -279,7 +235,7 @@ class Explorator:
                         f"Do not research unrelated topics."
                     ),
                     deps=deps,
-                    model_settings=OLLAMA_TOOL_SETTINGS,
+                    model_settings=AgentsConfiguration.EXPLORATOR.model_settings,
                 )
             except (UnexpectedModelBehavior, ModelHTTPError) as e:
                 logger.warning(f"Explorator failure: {e}")
@@ -289,15 +245,15 @@ class Explorator:
 
 class Tabularius:
     """Structured Data Research Agent"""
-    def __init__(self):
+    def __init__(self, model=None, instructions: str | None = None):
         from .tools import TABULARIUS_AGENT_TOOLSET, TABULARIUS_TOOLSET
         self.tool_names = TABULARIUS_TOOLSET.tools
         self.agent = Agent(
-            model=research_coordinate_model,
+            model=model or AgentsConfiguration.TABULARIUS.make_model(),
             deps_type=AgentDeps,
-            instructions=Prompts.TABULARIUS,
+            instructions=instructions if instructions is not None else Prompts.TABULARIUS,
             toolsets=[TABULARIUS_AGENT_TOOLSET],
-            model_settings=OLLAMA_TOOL_SETTINGS,
+            model_settings=AgentsConfiguration.TABULARIUS.model_settings,
             retries=2,
         )
         inject_date(agent=self.agent)
@@ -319,7 +275,7 @@ class Tabularius:
                         f"Do not research unrelated topics."
                     ),
                     deps=deps,
-                    model_settings=OLLAMA_TOOL_SETTINGS,
+                    model_settings=AgentsConfiguration.TABULARIUS.model_settings,
                 )
             except (UnexpectedModelBehavior, ModelHTTPError) as e:
                 logger.warning(f"Tabularius failure: {e}")
@@ -330,18 +286,23 @@ class Tabularius:
 class Nuntius:
     """Report/Response generator
     """
-    def __init__(self):
+    def __init__(self, model=None, instructions: str | None = None):
         self.agent = Agent(
-            model=reflect_write_model,
-            instructions=Prompts.WRITER
+            model=model or AgentsConfiguration.NUNTIUS.make_model(),
+            instructions=instructions if instructions is not None else Prompts.WRITER
         )
         inject_date(agent=self.agent)
 
-    async def write(self, user_input: str, research: str) -> str:
+    async def write(
+        self,
+        user_input: str,
+        research: str,
+        model_settings: dict | None = None,
+    ) -> str:
         """Write a sourced response from research findings."""
         result = await self.agent.run(
             user_prompt=f"User Question: {user_input}\n\n{research}",
-            model_settings=OLLAMA_WRITE_SETTINGS,
+            model_settings=model_settings or AgentsConfiguration.NUNTIUS.model_settings,
         )
         output = strip_think_tags(result.output)
         return output
@@ -350,37 +311,46 @@ class Nuntius:
 class Cogitator:
     """Reflection agent
     """
-    def __init__(self):
+    def __init__(self, model=None, instructions: str | None = None):
         self.agent = Agent(
-            model=reflect_write_model,
-            instructions=Prompts.REFLECTION
+            model=model or AgentsConfiguration.COGITATOR.make_model(),
+            instructions=instructions if instructions is not None else Prompts.REFLECTION
         )
         inject_date(agent=self.agent)
 
-    async def review(self, user_input: str, draft: str) -> str:
+    async def review(
+        self,
+        user_input: str,
+        draft: str,
+        model_settings: dict | None = None,
+    ) -> str:
         """Review a draft response; returns 'APPROVED' or improvement feedback."""
         result = await self.agent.run(
             user_prompt=f"Original Question: {user_input}\n\nDraft Response:\n{draft}",
-            model_settings=OLLAMA_TOOL_SETTINGS,
+            model_settings=model_settings or AgentsConfiguration.COGITATOR.model_settings,
         )
         return strip_think_tags(result.output)
 
 
 class Probator:
     """Research gap analysis agent — evaluates research completeness."""
-    def __init__(self):
+    def __init__(self, model=None, instructions: str | None = None):
         self.agent = Agent(
-            # model=reflect_write_model,
-            model=research_coordinate_model,
-            instructions=Prompts.GAP_ANALYSIS
+            model=model or AgentsConfiguration.PROBATOR.make_model(),
+            instructions=instructions if instructions is not None else Prompts.GAP_ANALYSIS
         )
         inject_date(agent=self.agent)
 
-    async def analyze(self, user_input: str, research: str) -> str | None:
+    async def analyze(
+        self,
+        user_input: str,
+        research: str,
+        model_settings: dict | None = None,
+    ) -> str | None:
         """Analyze research for gaps. Returns gap description or None if adequate."""
         result = await self.agent.run(
             user_prompt=f"Original Question: {user_input}\n\nResearch Findings:\n{research}",
-            model_settings=OLLAMA_TOOL_SETTINGS,
+            model_settings=model_settings or AgentsConfiguration.PROBATOR.model_settings,
         )
         output = strip_think_tags(result.output)
         if "ADEQUATE" in output.upper():
@@ -403,7 +373,7 @@ class Praetor:
         self._registries: dict[int, SourceRegistry] = {}
         from .tools import ALL_RESEARCH_TOOLSET
         self.agent = Agent(
-            model=research_coordinate_model,
+            model=AgentsConfiguration.PRAETOR.make_model(),
             instructions=Prompts.COORDINATOR,
             deps_type=AgentDeps,
             output_type=str,
@@ -412,7 +382,7 @@ class Praetor:
                 self.get_sources,
                 self.create_research_plan,
             ],
-            retries=2,
+            retries=4,
         )
         inject_date(self.agent)
         inject_tool_list(self.agent, ALL_RESEARCH_TOOLSET)
@@ -718,7 +688,7 @@ class Praetor:
                     user_prompt=user_input,
                     message_history=self.history.get(chat_id),
                     deps=deps,
-                    model_settings=OLLAMA_TOOL_SETTINGS,
+                    model_settings=AgentsConfiguration.PRAETOR.model_settings,
                 )
                 logger.debug(f"[Praetor] output:\n{result.output}")
                 self.history.update(chat_id, result.all_messages())

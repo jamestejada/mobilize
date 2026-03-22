@@ -16,3 +16,6 @@ prompts/
 rss_feeds/
 
 logs/
+
+# pytest cache
+.pytest_cache/

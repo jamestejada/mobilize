@@ -38,12 +38,12 @@ class RSS:
 
 
 class Prompts:
-    COORDINATOR = PROMPT_PATH.joinpath("coordinator.md").read_text()
-    REFLECTION = PROMPT_PATH.joinpath("reflection.md").read_text()
-    EXPLORATOR = PROMPT_PATH.joinpath("explorator.md").read_text()
-    TABULARIUS = PROMPT_PATH.joinpath("tabularius.md").read_text()
-    WRITER = PROMPT_PATH.joinpath("writer.md").read_text()
-    GAP_ANALYSIS = PROMPT_PATH.joinpath("gap_analysis.md").read_text()
+    COORDINATOR = PROMPT_PATH.joinpath(os.getenv("COORDINATOR_PROMPT", "coordinator.md")).read_text()
+    REFLECTION = PROMPT_PATH.joinpath(os.getenv("REFLECTION_PROMPT", "reflection.md")).read_text()
+    EXPLORATOR = PROMPT_PATH.joinpath(os.getenv("EXPLORATOR_PROMPT", "explorator.md")).read_text()
+    TABULARIUS = PROMPT_PATH.joinpath(os.getenv("TABULARIUS_PROMPT", "tabularius.md")).read_text()
+    WRITER = PROMPT_PATH.joinpath(os.getenv("WRITER_PROMPT", "writer.md")).read_text()
+    GAP_ANALYSIS = PROMPT_PATH.joinpath(os.getenv("GAP_ANALYSIS_PROMPT", "gap_analysis.md")).read_text()
 
 
 class OllamaEndpoints:
@@ -82,10 +82,6 @@ class CongressCredentials:
 class CourtListenerCredentials:
     API_KEY = os.getenv("COURTLISTENER_API_KEY", "")
 
-
-class Models:
-    Research_Coordinate = os.getenv("RESEARCH_COORDINATE_MODEL", "qwen3:8b-q4_K_M")
-    Reflect_Write = os.getenv("REFLECT_WRITE_MODEL", "qwen2.5:14b-instruct-q4_k_m")
 
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", 30))
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_CTX_SIZE", 8192))

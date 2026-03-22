@@ -69,4 +69,7 @@ class OllamaRetryTransport(httpx.AsyncBaseTransport):
         return response
 
 
-ollama_http_client = httpx.AsyncClient(transport=OllamaRetryTransport())
+ollama_http_client = httpx.AsyncClient(
+    transport=OllamaRetryTransport(),
+    timeout=httpx.Timeout(180.0, connect=10.0),
+)
