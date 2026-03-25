@@ -89,7 +89,7 @@ async def stop_query(message: types.Message):
     task = _running_tasks.get(message.chat.id)
     if task and not task.done():
         task.cancel()
-        await message.reply("_Stopping current query..._", parse_mode=ParseMode.MARKDOWN)
+        await message.reply("<i>Stopping current query...</i>")
     else:
         await message.reply("No query is running.")
 
@@ -280,7 +280,10 @@ async def regular_message(message: types.Message):
     try:
         await task
     except asyncio.CancelledError:
-        await message.reply("_Query stopped._", parse_mode=ParseMode.MARKDOWN)
+        await message.reply("<i>Query stopped.</i>")
+    except Exception as e:
+        logger.error(f"Query failed for chat {chat_id}: {e}", exc_info=True)
+        await message.reply("<i>Something went wrong and the query could not be completed. Please try again.</i>")
     finally:
         _running_tasks.pop(chat_id, None)
 

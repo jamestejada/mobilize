@@ -106,24 +106,6 @@ class TestMaxHistory:
             assert settings.MAX_HISTORY == 50
 
 
-class TestModels:
-    def test_default_coordinate_model(self):
-        import importlib
-        import src.settings as settings
-        with patch.dict(os.environ, stripped_env("RESEARCH_COORDINATE_MODEL"), clear=True), \
-             patch("dotenv.load_dotenv"):
-            importlib.reload(settings)
-            assert settings.Models.Research_Coordinate == "qwen3:8b-q4_K_M"
-
-    def test_default_reflect_write_model(self):
-        import importlib
-        import src.settings as settings
-        with patch.dict(os.environ, stripped_env("REFLECT_WRITE_MODEL"), clear=True), \
-             patch("dotenv.load_dotenv"):
-            importlib.reload(settings)
-            assert settings.Models.Reflect_Write == "qwen2.5:14b-instruct-q4_k_m"
-
-
 class TestLogDir:
     def test_default_log_dir(self):
         env = {k: v for k, v in os.environ.items() if k != "LOG_DIRECTORY"}

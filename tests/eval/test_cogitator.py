@@ -53,9 +53,9 @@ FAIL if the response begins with 'IMPROVE:' — this draft does not need improve
 
 def _cogitator_params(models=REFLECT_WRITE_MODELS, prompts=REFLECTION_PROMPT_VARIANTS):
     return [
-        pytest.param((m, p.values[0]), id=f"model={m},{p.id}")
-        for m in models
-        for p in prompts
+        pytest.param((model, prompt.values[0]), id=f"model={model},{prompt.id}")
+        for model in models
+        for prompt in prompts
     ]
 
 # ---------------------------------------------------------------------------

@@ -43,8 +43,8 @@ class AgentSettings:
 
 
 class AgentsConfiguration:
-    PRAETOR    = AgentSettings(
-            model=os.getenv("PRAETOR_MODEL",    "qwen3.5:latest"),
+    PRAETOR = AgentSettings(
+            model=os.getenv("PRAETOR_MODEL", "qwen3.5:latest"),
             think=True,
             temperature=0.1
         )
@@ -58,19 +58,19 @@ class AgentsConfiguration:
             think=False,
             temperature=0.1
         )
-    NUNTIUS    = AgentSettings(
-            model=os.getenv("NUNTIUS_MODEL",    "qwen3:14b"),
+    NUNTIUS = AgentSettings(
+            model=os.getenv("NUNTIUS_MODEL", "qwen3:14b"),
             think=True,
             temperature=0.35,
             top_p=0.9
         )
-    COGITATOR  = AgentSettings(
-            model=os.getenv("COGITATOR_MODEL",  "qwen3.5:latest"),
+    COGITATOR = AgentSettings(
+            model=os.getenv("COGITATOR_MODEL", "qwen2.5:14b-instruct-q4_k_m"),
             think=False,
             temperature=0.1
         )
-    PROBATOR   = AgentSettings(
-            model=os.getenv("PROBATOR_MODEL",   "qwen3:14b"),
+    PROBATOR = AgentSettings(
+            model=os.getenv("PROBATOR_MODEL", "qwen3:14b"),
             think=True,
-             temperature=0.1
+            temperature=0.1
         )

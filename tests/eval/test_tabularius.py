@@ -6,8 +6,7 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 from src.ai import Tabularius
 from src.agent_settings import AgentsConfiguration
-from src.settings import Prompts
-from tests.eval.conftest import TOOL_USE_MODELS, make_eval_deps
+from tests.eval.conftest import TOOL_USE_MODELS, TABULARIUS_PROMPT_VARIANTS, make_eval_deps
 from tests.eval.evaluator import EvaluatorAgent
 from tests.eval.tool_helpers import get_calls_for_tool, get_tool_invocations, tool_return_looks_successful
 from tests.eval.fixtures.tabularius_cases import (
@@ -60,11 +59,9 @@ def _get_called_tools(result) -> set[str]:
 
 def _tabularius_params():
     return [
-        pytest.param(
-            (m, Prompts.TABULARIUS),
-            id=f"model={m}"
-        )
-        for m in TOOL_USE_MODELS
+        pytest.param((model, prompt.values[0]), id=f"model={model},{prompt.id}")
+        for model in TOOL_USE_MODELS
+        for prompt in TABULARIUS_PROMPT_VARIANTS
     ]
 
 

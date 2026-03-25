@@ -47,9 +47,9 @@ def _build_research(case: NuntiusCase) -> str:
 
 def _nuntius_params(models=REFLECT_WRITE_MODELS, prompts=WRITER_PROMPT_VARIANTS):
     return [
-        pytest.param((m, p.values[0]), id=f"model={m},{p.id}")
-        for m in models
-        for p in prompts
+        pytest.param((model, prompt.values[0]), id=f"model={model},{prompt.id}")
+        for model in models
+        for prompt in prompts
     ]
 
 # ---------------------------------------------------------------------------

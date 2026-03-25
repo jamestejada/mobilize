@@ -74,6 +74,7 @@ COORDINATE_MODELS = [
 ]
 
 TOOL_USE_MODELS = [
+    "qwen2.5:14b-instruct-q4_k_m",
     "qwen3:8b-q4_K_M",
     "qwen3:14b",
     "hermes3:8b",
@@ -145,6 +146,9 @@ def _prompt_variants(agent_name: str) -> list:
 WRITER_PROMPT_VARIANTS = _prompt_variants("writer")
 REFLECTION_PROMPT_VARIANTS = _prompt_variants("reflection")
 GAP_ANALYSIS_PROMPT_VARIANTS = _prompt_variants("gap_analysis")
+EXPLORATOR_PROMPT_VARIANTS = _prompt_variants("explorator")
+TABULARIUS_PROMPT_VARIANTS = _prompt_variants("tabularius")
+COORDINATOR_PROMPT_VARIANTS = _prompt_variants("coordinator")
 
 
 # ---------------------------------------------------------------------------

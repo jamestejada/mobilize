@@ -40,6 +40,8 @@ def setup_logging() -> None:
             "cookie_store",
             "httpcore.http11",
             "httpcore.http2",
+            "httpcore.connection",
             "primp.utils",
+
         ):
         logging.getLogger(noisy).setLevel(logging.WARNING)

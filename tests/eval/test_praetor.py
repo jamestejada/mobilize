@@ -6,9 +6,8 @@ from pydantic_ai import Agent, RunContext
 
 from src.ai import AgentDeps, inject_date, inject_tool_list
 from src.agent_settings import AgentsConfiguration
-from src.settings import Prompts
 from src.tools import ALL_RESEARCH_TOOLSET
-from tests.eval.conftest import COORDINATE_MODELS, _make_ollama_model, make_eval_deps
+from tests.eval.conftest import COORDINATE_MODELS, COORDINATOR_PROMPT_VARIANTS, _make_ollama_model, make_eval_deps
 from tests.eval.evaluator import EvaluatorAgent
 from tests.eval.tool_helpers import get_calls_for_tool
 from tests.eval.fixtures.praetor_cases import (
@@ -57,8 +56,9 @@ FAIL if ANY of the following are true:
 
 def _praetor_params():
     return [
-        pytest.param((m, Prompts.COORDINATOR), id=f"model={m}")
-        for m in COORDINATE_MODELS
+        pytest.param((model, prompt.values[0]), id=f"model={model},{prompt.id}")
+        for model in COORDINATE_MODELS
+        for prompt in COORDINATOR_PROMPT_VARIANTS
     ]
 
 

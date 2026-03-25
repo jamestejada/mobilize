@@ -35,6 +35,8 @@ def strip_think_tags(text: str) -> str:
     # Remove any trailing garbage after endoftext/im_start tokens
     text = re.sub(r'<\|endoftext\|>.*', '', text, flags=re.DOTALL)
     text = re.sub(r'<\|im_start\|>.*', '', text, flags=re.DOTALL)
+    # Strip \boxed{...} LaTeX artifacts (Qwen math training bleed)
+    text = re.sub(r'\s*\\boxed\{[^}]*\}', '', text)
     return text.strip()
 
 
@@ -43,10 +45,17 @@ def strip_think_tags(text: str) -> str:
 #                  ┌────────────┴────────────┐
 #                  │        Praetor          │
 #                  │  (coordinator agent)    │
+#                  │                         │
+#                  │  Tools: run_research,   │
+#                  │  create_research_plan,  │
+#                  │  get_sources            │
 #                  └────────────┬────────────┘
 #                               │
+#              Praetor decides whether to call
+#              run_research or answer directly
+#                               │
 #            ┌──────────────────┴───────────────────┐
-#            │ deps.research_findings?              │
+#      called run_research?                   no research needed
 #           YES                                    NO
 #            │                                      │
 #            ▼                                      ▼
@@ -57,23 +66,26 @@ def strip_think_tags(text: str) -> str:
 #    │   (web/social)      │
 #    └── Tabularius        │
 #        (data/events)     │
-#            │             │
-#            ▼             │
-#    Probator gap loop     │
-#    ┌─────────────┐       │
-#    │ analyze()   │       │
-#    │   │         │       │
-#    │ ADEQUATE  GAPS ─────┤
-#    │   │    (+ SEARCH:)  │
-#    │   │         │       │
-#    │   │  _run_followup  │
-#    │   │  _research()    │
-#    │   │  (parallel)     │
-#    │   │     │           │
-#    │   │  no new sources?│
-#    │   │     → break     │
-#    └───┴─────────────────┘
 #            │
+#            ▼
+#    deps.research_findings populated
+#            │
+#            ▼
+#    Probator gap loop (max 2 rounds)
+#    ┌──────────────────────┐
+#    │ probator.analyze()   │
+#    │       │              │
+#    │   None (adequate)  gaps found
+#    │       │              │
+#    │       │    _run_followup_research()
+#    │       │         (parallel)
+#    │       │              │
+#    │       │    no new sources? → break
+#    │       │              │
+#    │    break        loop back ──┐
+#    │       │              │      │
+#    └───────┴──────────────┘      │
+#            │          ▲──────────┘
 #            ▼
 #    _write_and_review()
 #            │
@@ -92,7 +104,7 @@ def strip_think_tags(text: str) -> str:
 #    │       │     │     └─┼───┘ (rewrite with feedback)
 #    │       │     ▼       │
 #    │       │  _run_followup_research()
-#    │       │  no new sources? → break
+#    │       │  no new sources? → revise with existing
 #    │       │     │       │
 #    │       │  nuntius.write() (with new data)
 #    └───────┴─────┴───────┘
@@ -650,12 +662,18 @@ class Praetor:
                 await self._run_followup_research(
                     feedback, deps, deps.chat_id
                 )
-                if len(registry._sources) == sources_before:
-                    logger.warning("Review followup added no new sources — skipping rewrite")
-                    break
-                await deps.update_chat("_Revising with new information..._")
+                found_new_sources = len(registry._sources) > sources_before
+                if found_new_sources:
+                    await deps.update_chat("_Revising with new information..._")
+                else:
+                    logger.warning("Review followup added no new sources — revising with existing sources")
+                    await deps.update_chat("_Revising..._")
                 writing_context = await self._build_writing_context(deps, deps.chat_id, query_embedding)
-                draft = await self.nuntius.write(deps.user_input, writing_context)
+                nuntius_input = (
+                    writing_context if found_new_sources
+                    else f"{writing_context}\n\nPrevious Draft:\n{draft}\n\nReviewer Feedback:\n{feedback}"
+                )
+                draft = await self.nuntius.write(deps.user_input, nuntius_input)
             else:
                 await deps.update_chat("_Revising..._")
                 writing_context = await self._build_writing_context(deps, deps.chat_id, query_embedding)

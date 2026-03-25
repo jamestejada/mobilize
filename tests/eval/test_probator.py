@@ -54,9 +54,9 @@ FAIL if the response is 'ADEQUATE' — the single LOW-confidence claim needs fol
 
 def _probator_params(models=COORDINATE_MODELS, prompts=GAP_ANALYSIS_PROMPT_VARIANTS):
     return [
-        pytest.param((m, p.values[0]), id=f"model={m},{p.id}")
-        for m in models
-        for p in prompts
+        pytest.param((model, prompt.values[0]), id=f"model={model},{prompt.id}")
+        for model in models
+        for prompt in prompts
     ]
 
 # ---------------------------------------------------------------------------
