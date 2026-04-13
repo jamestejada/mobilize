@@ -7,8 +7,6 @@ from typing import (
         Protocol,
         runtime_checkable,
         List,
-        Tuple,
-        Set,
         Any,
         Optional
     )
@@ -360,29 +358,23 @@ class SourceDataBuilder:
         "search_wikipedia",   # context only — not a citable reference
     }
 
-    def build(self, messages: List[Any], registry: Optional[SourceRegistry] = None) -> Tuple[str, SourceRegistry]:
-        """Extract tool results from messages and build source data with registry.
-
-        Accumulates into an existing registry if provided, so SOURCE_N tags
-        remain consistent across multiple research calls within one query.
+    def build(self, messages: List[Any], registry: SourceRegistry) -> str:
+        """Extract tool results from messages and register sources.
 
         Args:
             messages: Message history from agent run
-            registry: Existing registry to extend. Creates a fresh one if None.
+            registry: Registry to accumulate sources into.
 
         Returns:
-            Tuple of (formatted source text, registry)
+            Formatted source text (empty string if no tool results).
         """
-        if registry is None:
-            registry = SourceRegistry()
-
         tool_parts = self._extract_tool_parts(messages)
         sections = self._collect_sections(tool_parts, registry, None)
 
         if not sections:
-            return "", registry
+            return ""
 
-        return self._build_source_text(sections), registry
+        return self._build_source_text(sections)
 
     def _collect_sections(
         self,

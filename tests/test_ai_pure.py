@@ -62,6 +62,23 @@ class TestStripThinkTags:
         assert "garbage" not in result
         assert "Answer" in result
 
+    def test_removes_gemma_visible_thinking_block(self):
+        text = (
+            "Thinking...\n"
+            "Here is a thinking process.\n"
+            "1. Analyze the question.\n"
+            "...done thinking.\n\n"
+            "Final answer."
+        )
+        result = strip_think_tags(text)
+        assert "thinking process" not in result
+        assert "Analyze the question" not in result
+        assert result == "Final answer."
+
+    def test_preserves_plain_text_when_done_marker_missing(self):
+        text = "Thinking... out loud about truth."
+        assert strip_think_tags(text) == text
+
 
 # ---------------------------------------------------------------------------
 # CallCounter

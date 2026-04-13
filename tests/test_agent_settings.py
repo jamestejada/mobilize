@@ -23,7 +23,7 @@ class TestAgentsConfigurationDefaults:
         ("EXPLORATOR", "EXPLORATOR_MODEL", "qwen3:14b"),
         ("TABULARIUS", "TABULARIUS_MODEL", "qwen3:14b"),
         ("NUNTIUS",    "NUNTIUS_MODEL",    "qwen3:14b"),
-        ("COGITATOR",  "COGITATOR_MODEL",  "qwen3.5:latest"),
+        ("COGITATOR",  "COGITATOR_MODEL",  "qwen2.5:14b-instruct-q4_k_m"),
         ("PROBATOR",   "PROBATOR_MODEL",   "qwen3:14b"),
     ])
     def test_default_model(self, agent, env_var, expected_default):

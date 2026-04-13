@@ -62,6 +62,7 @@ class BlueSkyCredentials:
     HANDLE = os.getenv("BSKY_HANDLE")
     APP_PASSWORD = os.getenv("BSKY_APP_PASSWORD")
 
+
 class TelegramBotCredentials:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     CHANNEL_ID = int(os.getenv("BOT_CHANNEL_ID"))
@@ -70,6 +71,7 @@ class TelegramBotCredentials:
         for uid in os.getenv("ALLOWED_USER_IDS", "").split(",")
         if uid.strip()
     }
+
 
 class FECCredentials:
     API_KEY = os.getenv("FEC_API_KEY", "DEMO_KEY")  # DEMO_KEY works without registration

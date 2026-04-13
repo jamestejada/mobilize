@@ -23,12 +23,11 @@ WELL_SOURCED_INPUT = NuntiusCase(
 Bill S.1234 introduced March 2025, proposes $40B for passenger rail expansion, \
 currently in Senate Commerce Committee.
 - [SOURCE_2] Rail Bill Opposition Summary [via Reuters] [LOW]: \
-Several Republican senators signal opposition citing cost concerns; procedural \
-vote scheduled for April 2026.""",
+Several Republican senators cited cost concerns; the bill passed the Senate 54-46 on April 7, 2026.""",
     research_findings="""Research Findings (Web/Social):
-Congress is considering the Rail Infrastructure Investment Act S.1234, a $40B rail bill.
-It has bipartisan support in committee but faces floor opposition from fiscal conservatives.
-A vote is expected in April 2026.""",
+Congress passed the Rail Infrastructure Investment Act S.1234, a $40B rail bill, in the Senate 54-46 on April 7, 2026.
+It had bipartisan support in committee but faced floor opposition from fiscal conservatives.
+The bill now moves to the House.""",
     notes="Clean sourced input; expect dense [SOURCE_N] usage",
 )
 

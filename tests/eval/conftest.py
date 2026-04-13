@@ -57,12 +57,15 @@ def pytest_configure(config):
 # Model variants
 # ---------------------------------------------------------------------------
 
+GEMMA4_MODEL = "gemma4:latest"
+
 REFLECT_WRITE_MODELS = [
     "qwen2.5:14b-instruct-q4_k_m",
     "qwen3:14b",
     "cogito:14b",
     "mistral:latest",
     "qwen3.5:latest",
+    GEMMA4_MODEL,
 ]
 
 COORDINATE_MODELS = [
@@ -71,6 +74,7 @@ COORDINATE_MODELS = [
     "cogito:14b",
     "mistral:latest",
     "qwen3.5:latest",
+    GEMMA4_MODEL,
 ]
 
 TOOL_USE_MODELS = [
@@ -83,6 +87,7 @@ TOOL_USE_MODELS = [
     "llama3-groq-tool-use:8b",
     "qwen3.5:latest",
     "cogito:14b",
+    GEMMA4_MODEL,
 ]
 
 

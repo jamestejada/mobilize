@@ -11,6 +11,9 @@ wheels/
 .env
 
 .claude/
+.codex/
+.codex
+.agent_artifacts/
 
 prompts/
 rss_feeds/
@@ -19,3 +22,6 @@ logs/
 
 # pytest cache
 .pytest_cache/
+
+# Service file
+eyes.service

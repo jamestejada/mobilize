@@ -19,11 +19,11 @@ COMPREHENSIVE_RESEARCH = ProbatorCase(
     research_findings="""Research Findings:
 The Rail Infrastructure Investment Act S.1234 was introduced by Sen. Collins in March 2025 [SOURCE_1].
 It passed the Senate Commerce Committee 12-8 on February 14, 2026 [SOURCE_2].
-A floor vote is scheduled for April 7, 2026 [SOURCE_3].
-Opposition from five Republican senators cites $40B cost [SOURCE_4].
-A companion House bill H.R.2234 was introduced by Rep. Ocasio-Cortez [SOURCE_5].""",
+The Senate passed the bill 54-46 on April 7, 2026 [SOURCE_3].
+Opposition from five Republican senators cited $40B cost [SOURCE_4].
+A companion House bill H.R.2234 was introduced by Rep. Ocasio-Cortez and is pending committee review [SOURCE_5].""",
     expected_verdict="ADEQUATE",
-    notes="Full coverage: introduction, committee vote, floor schedule, opposition, companion bill",
+    notes="Full coverage: introduction, committee vote, floor vote outcome, opposition, companion bill",
 )
 
 MISSING_KEY_ANGLE = ProbatorCase(
