@@ -55,11 +55,6 @@ class TestGetFeedUnknownName:
         assert isinstance(result, str)
         assert "not found" in result.lower() or "Nonexistent Feed" in result
 
-    async def test_unknown_feed_suggests_valid_names(self):
-        result = await get_feed("Mystery", FEEDS_JSON)
-        # Should mention valid feed names
-        assert "White House" in result or "State Department" in result
-
     async def test_empty_feeds_dict_returns_error(self):
         result = await get_feed("Any Feed", {})
         assert isinstance(result, str)

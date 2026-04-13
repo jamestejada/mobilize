@@ -20,10 +20,10 @@ def reload_agent_settings(**env_overrides):
 class TestAgentsConfigurationDefaults:
     @pytest.mark.parametrize("agent,env_var,expected_default", [
         ("PRAETOR",    "PRAETOR_MODEL",    "qwen3.5:latest"),
-        ("EXPLORATOR", "EXPLORATOR_MODEL", "qwen3:14b"),
-        ("TABULARIUS", "TABULARIUS_MODEL", "qwen3:14b"),
+        ("EXPLORATOR", "EXPLORATOR_MODEL", "qwen3:8b-q4_K_M"),
+        ("TABULARIUS", "TABULARIUS_MODEL", "hermes3:8b"),
         ("NUNTIUS",    "NUNTIUS_MODEL",    "qwen3:14b"),
-        ("COGITATOR",  "COGITATOR_MODEL",  "qwen2.5:14b-instruct-q4_k_m"),
+        ("COGITATOR",  "COGITATOR_MODEL",  "qwen3.5:latest"),
         ("PROBATOR",   "PROBATOR_MODEL",   "qwen3:14b"),
     ])
     def test_default_model(self, agent, env_var, expected_default):

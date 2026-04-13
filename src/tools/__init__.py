@@ -10,10 +10,8 @@ from src.tools.bsky import (
     get_trending_topics
     )
 from src.tools.rss import (
-    list_gov_rss_feeds,
     get_gov_rss_feed,
-    list_world_news_rss_feeds,
-    get_world_news_rss_feed
+    get_world_news_rss_feed,
 )
 from src.tools.polymarket import search_polymarket, get_polymarket_event
 from src.tools.fetch_url import fetch_url
@@ -43,9 +41,7 @@ EXPLORATOR_TOOLSET = FunctionToolset([
 
 # Structured data sources: RSS feeds, events, prediction markets
 TABULARIUS_TOOLSET = FunctionToolset([
-    list_gov_rss_feeds,
     get_gov_rss_feed,
-    list_world_news_rss_feeds,
     get_world_news_rss_feed,
     get_protests_for_llm,
     search_polymarket,

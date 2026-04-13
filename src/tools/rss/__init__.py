@@ -47,11 +47,10 @@ async def get_feed(feed_name: str, feeds_json: dict) -> List[RSSFeedItem] | str:
     """Fetches and returns current items from a single RSS feed."""
     data = feeds_json.get(feed_name)
     if not data or not data.get("url"):
-        valid = ", ".join(f'"{k}"' for k in list(feeds_json.keys())[:10])
         msg = (
             f"RSS feed '{feed_name}' not found. "
-            f"Call list_*_rss_feeds() first to get valid names. "
-            f"Some valid names: {valid}..."
+            f"Call get_gov_rss_feed() or get_world_news_rss_feed() with no argument "
+            f"to retrieve valid feed names, then retry."
         )
         logger.warning(msg)
         return msg
@@ -85,80 +84,55 @@ async def list_rss_feeds(json_feeds: dict, feed_description: str):
         )
 
 
-# Listing feeds for LLM use
-async def list_gov_rss_feeds(ctx: RunContext[AgentDeps]):
-    """Lists US Government RSS feed names — call first, then get_gov_rss_feed(feed_name).
+async def get_gov_rss_feed(ctx: RunContext[AgentDeps], feed_name: str = "") -> List[RSSFeedItem] | str:
+    """Fetches a US Government RSS feed by name.
 
-    No parameters required.
-
-    Returns:
-        str: Formatted list of available US Government RSS feed names.
-
-    Example:
-        list_gov_rss_feeds()
-    """
-    await ctx.deps.update_chat("_Listing US Government RSS feeds_")
-    return await list_rss_feeds(
-            json_feeds=RSS.US_GOV_JSON,
-            feed_description="US Government"
-    )
-
-
-
-async def list_world_news_rss_feeds(ctx: RunContext[AgentDeps]):
-    """Lists world/international news RSS feed names — call first, then get_world_news_rss_feed(feed_name).
-
-    No parameters required.
-
-    Returns:
-        str: Formatted list of available World News RSS feed names.
-
-    Example:
-        list_world_news_rss_feeds()
-    """
-    await ctx.deps.update_chat("_Listing World News RSS feeds_")
-    return await list_rss_feeds(
-            json_feeds=RSS.WORLD_NEWS_JSON,
-            feed_description="World News"
-    )
-
-
-async def get_gov_rss_feed(ctx: RunContext[AgentDeps], feed_name: str) -> List[RSSFeedItem] | str:
-    """Fetches current items from a US Government RSS feed by name (use after list_gov_rss_feeds).
+    Call with no argument first to discover available feed names, then call
+    again with the exact name to fetch current headlines.
 
     Args:
-        feed_name (str): The exact name of the RSS feed to fetch. Use list_gov_rss_feeds
-            first to get valid feed names. Example: "White House" or "State Department"
+        feed_name (str): Name of the feed to fetch. Omit (or pass empty string)
+            to list all available feeds. Must be an exact name from the catalog.
 
     Returns:
-        List[RSSFeedItem]: List of current items from the specified RSS feed.
+        str: Newline-separated list of valid feed names (when feed_name is empty).
+        List[RSSFeedItem]: Current headlines from the named feed.
 
     Example:
-        # Step 1: list_gov_rss_feeds() to see available feeds
-        # Step 2: get_gov_rss_feed(feed_name="White House")
+        get_gov_rss_feed()                # discover available feed names
+        get_gov_rss_feed(feed_name="...") # fetch after discovering
     """
-    await ctx.deps.update_chat(f"_Fetching feeds for {feed_name}_")
+    if not feed_name:
+        await ctx.deps.update_chat("_Listing US Government RSS feeds_")
+        return await list_rss_feeds(json_feeds=RSS.US_GOV_JSON, feed_description="US Government")
+    await ctx.deps.update_chat(f"_Fetching {feed_name} RSS feed_")
     results = await get_feed(feed_name=feed_name, feeds_json=RSS.US_GOV_JSON)
     SourceRegistry.register_all(ctx.deps.source_registry, results)
     return results
 
 
+async def get_world_news_rss_feed(ctx: RunContext[AgentDeps], feed_name: str = "") -> List[RSSFeedItem] | str:
+    """Fetches a world/international news RSS feed, including specialized security and military outlets.
 
-async def get_world_news_rss_feed(ctx: RunContext[AgentDeps], feed_name: str) -> List[RSSFeedItem] | str:
-    """Fetches a world news RSS feed by name, including specialized security/military outlets (use after list_world_news_rss_feeds).
+    Call with no argument first to discover available feed names, then call
+    again with the exact name to fetch current headlines.
 
     Args:
-        feed_name (str): The exact name of the RSS feed to fetch. Use list_world_news_rss_feeds
-            first to get valid feed names. Example: "BBC World" or "Al Jazeera"
+        feed_name (str): Name of the feed to fetch. Omit (or pass empty string)
+            to list all available feeds. Must be an exact name from the catalog.
 
     Returns:
-        List[RSSFeedItem]: List of current items from the specified RSS feed.
+        str: Newline-separated list of valid feed names (when feed_name is empty).
+        List[RSSFeedItem]: Current headlines from the named feed.
 
     Example:
-        # Step 1: list_world_news_rss_feeds() to see available feeds
-        # Step 2: get_world_news_rss_feed(feed_name="BBC World")
+        get_world_news_rss_feed()                # discover available feed names
+        get_world_news_rss_feed(feed_name="...") # fetch after discovering
     """
-    await ctx.deps.update_chat(f"_Fetching feeds for {feed_name}_")
+    if not feed_name:
+        await ctx.deps.update_chat("_Listing World News RSS feeds_")
+        return await list_rss_feeds(json_feeds=RSS.WORLD_NEWS_JSON, feed_description="World News")
+    await ctx.deps.update_chat(f"_Fetching {feed_name} RSS feed_")
     results = await get_feed(feed_name=feed_name, feeds_json=RSS.WORLD_NEWS_JSON)
     SourceRegistry.register_all(ctx.deps.source_registry, results)
     return results

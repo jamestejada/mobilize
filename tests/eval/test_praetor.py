@@ -36,7 +36,7 @@ PASS if ALL of the following are true:
 - Tool names referenced are valid OSINT tools from this list: search_web, search_news,
   search_bluesky_posts, get_bluesky_profile, get_author_feed, get_trending_topics,
   search_wikipedia, search_reddit_history, fetch_archived_page, fetch_url,
-  list_gov_rss_feeds, get_gov_rss_feed, list_world_news_rss_feeds, get_world_news_rss_feed,
+  get_gov_rss_feed, get_world_news_rss_feed,
   get_protests_for_llm, search_polymarket, get_polymarket_event, search_candidate_finance,
   search_committee_finance, search_legislation, search_court_cases, get_registered_sources
 - Contains a PRIORITY SOURCES: section

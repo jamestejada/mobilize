@@ -34,11 +34,11 @@ COURT_CASES_SEARCH = TabulariusCase(
 RSS_FEED_TWO_STEP = TabulariusCase(
     id="rss_feed_two_step",
     directive=(
-        "Use list_gov_rss_feeds to see what government RSS feeds are available, "
-        "then use get_gov_rss_feed to fetch one relevant feed. Summarize the headlines."
+        "Use get_gov_rss_feed to fetch headlines from a US Government RSS feed. "
+        "Summarize the headlines."
     ),
-    expected_tools=["list_gov_rss_feeds", "get_gov_rss_feed"],
-    notes="Two-step RSS pattern — tests whether model follows the list-then-fetch pattern",
+    expected_tools=["get_gov_rss_feed"],
+    notes="RSS discovery pattern — model must call get_gov_rss_feed() twice: once to discover names, once to fetch",
 )
 
 FEC_FINANCE_SEARCH = TabulariusCase(

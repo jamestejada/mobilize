@@ -49,12 +49,12 @@ class AgentsConfiguration:
             temperature=0.1
         )
     EXPLORATOR = AgentSettings(
-            model=os.getenv("EXPLORATOR_MODEL", "qwen3:14b"),
+            model=os.getenv("EXPLORATOR_MODEL", "qwen3:8b-q4_K_M"),
             think=False,
             temperature=0.1
         )
     TABULARIUS = AgentSettings(
-            model=os.getenv("TABULARIUS_MODEL", "qwen3:14b"),
+            model=os.getenv("TABULARIUS_MODEL", "hermes3:8b"),
             think=False,
             temperature=0.1
         )
@@ -65,7 +65,7 @@ class AgentsConfiguration:
             top_p=0.9
         )
     COGITATOR = AgentSettings(
-            model=os.getenv("COGITATOR_MODEL", "qwen2.5:14b-instruct-q4_k_m"),
+            model=os.getenv("COGITATOR_MODEL", "qwen3.5:latest"),
             think=False,
             temperature=0.1
         )

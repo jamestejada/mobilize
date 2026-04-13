@@ -38,9 +38,10 @@ FAIL if the output says it could not find anything when a tool was available.
 """
 
 RSS_TWO_STEP_CRITERION = """
-The agent was directed to first list RSS feeds, then fetch one.
+The agent was directed to fetch headlines from a US Government RSS feed.
 PASS if the output contains actual RSS feed headlines or article summaries.
 FAIL if the output only lists feed names without fetching any content.
+FAIL if the output is empty or contains no substantive headlines.
 """
 
 # ---------------------------------------------------------------------------
@@ -105,14 +106,12 @@ async def test_calls_court_cases_tool(tabularius: Tabularius, judge: EvaluatorAg
 
 @pytest.mark.parametrize("tabularius", _tabularius_params(), indirect=True)
 async def test_rss_two_step_lists_then_fetches(tabularius: Tabularius, judge: EvaluatorAgent):
-    """Must call list_gov_rss_feeds followed by get_gov_rss_feed."""
+    """Must call get_gov_rss_feed at least twice: once to discover feed names, once to fetch."""
     result, _ = await _run_case(tabularius, RSS_FEED_TWO_STEP)
-    called = _get_called_tools(result)
-    assert "list_gov_rss_feeds" in called, (
-        f"Never called list_gov_rss_feeds. Called: {called}\nOutput:\n{result.output}"
-    )
-    assert "get_gov_rss_feed" in called, (
-        f"Listed feeds but never fetched one. Called: {called}\nOutput:\n{result.output}"
+    rss_calls = get_calls_for_tool(result, "get_gov_rss_feed")
+    assert len(rss_calls) >= 2, (
+        f"Expected get_gov_rss_feed called at least twice (discover + fetch), "
+        f"got {len(rss_calls)} call(s).\nOutput:\n{result.output}"
     )
     eval_result = await judge.evaluate(RSS_TWO_STEP_CRITERION, result.output)
     assert eval_result.passed, (
