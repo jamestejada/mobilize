@@ -185,6 +185,9 @@ class SourceRegistry:
         # Normalize compound tags like [SOURCE_1, SOURCE_3] → [SOURCE_1] [SOURCE_3]
         text = self._expand_compound_tags(text)
 
+        # Normalize space separator: [SOURCE 3] → [SOURCE_3]
+        text = re.sub(r'\[SOURCE\s+(\w+)\]', lambda m: f'[SOURCE_{m.group(1)}]', text, flags=re.IGNORECASE)
+
         # Fix unclosed brackets: [SOURCE_3 → [SOURCE_3]
         text = re.sub(r'\[source_(\w+)\b(?!\])', lambda m: f'[SOURCE_{m.group(1).upper()}]', text, flags=re.IGNORECASE)
 
