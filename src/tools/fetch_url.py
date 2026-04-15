@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 import trafilatura
 from pydantic import BaseModel
@@ -92,6 +93,7 @@ class FetchedPage(BaseModel):
     url: str
     title: str
     body: str
+    tag: str = ""
 
     @property
     def source_url(self) -> str:
@@ -117,6 +119,33 @@ def _extract(html: str, url: str) -> Optional[FetchedPage]:
         title=getattr(result, "title", "") or "",
         body=body,
     )
+
+
+def _is_supported_url(url: str) -> bool:
+    parsed = urlparse(url.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+async def _fetch_page_from_url(url: str) -> Optional[FetchedPage]:
+    """Fetch and extract a page from a direct URL."""
+    try:
+        # Tier 1: trafilatura fetches and extracts directly (~0.5s)
+        html = trafilatura.fetch_url(url)
+        if html:
+            page = _extract(html, url)
+            if page:
+                return page
+
+        # Tier 2: JS fallback — Chromium renders, trafilatura extracts (~3-8s)
+        logger.info(f"Trafilatura failed for {url}, trying Chromium")
+        html = await _browser_manager.fetch(url)
+        if html:
+            return _extract(html, url)
+
+    except Exception as e:
+        logger.warning(f"fetch_url failed for {url}: {e}")
+
+    return None
 
 
 async def fetch_url(ctx: RunContext[AgentDeps], source_key: str) -> Optional[FetchedPage]:
@@ -149,21 +178,39 @@ async def fetch_url(ctx: RunContext[AgentDeps], source_key: str) -> Optional[Fet
 
     url = source_item.url
     await ctx.deps.update_chat(f"_Reading: {source_item.title or url}_")
-    try:
-        # Tier 1: trafilatura fetches and extracts directly (~0.5s)
-        html = trafilatura.fetch_url(url)
-        if html:
-            page = _extract(html, url)
-            if page:
-                return page
+    page = await _fetch_page_from_url(url)
+    if page:
+        page.tag = source_key.strip()
+    return page
 
-        # Tier 2: JS fallback — Chromium renders, trafilatura extracts (~3-8s)
-        logger.info(f"Trafilatura failed for {url}, trying Chromium")
-        html = await _browser_manager.fetch(url)
-        if html:
-            return _extract(html, url)
 
-    except Exception as e:
-        logger.warning(f"fetch_url failed for {url}: {e}")
+async def fetch_webpage(ctx: RunContext[AgentDeps], url: str) -> Optional[FetchedPage]:
+    """Fetch a user-provided webpage URL directly and register it as a source.
 
-    return None
+    Use this when the user includes a full webpage link in their message and
+    you need page text for context. Pass the raw URL exactly as given.
+
+    Args:
+        url (str): A full http(s) URL to fetch.
+
+    Returns:
+        FetchedPage with title/body text and a registered [SOURCE_N] tag, or
+        None if the URL is invalid or the page is unreachable/unreadable.
+    """
+    if not _is_supported_url(url):
+        logger.warning(f"fetch_webpage: invalid URL {url!r}")
+        return None
+
+    await ctx.deps.update_chat(f"_Reading: {url}_")
+    page = await _fetch_page_from_url(url.strip())
+    if page is None:
+        return None
+
+    registry = ctx.deps.source_registry
+    if registry is not None:
+        page.tag = registry.register(
+            url=page.url,
+            title=page.title or page.url,
+            description=page.body[:200],
+        )
+    return page

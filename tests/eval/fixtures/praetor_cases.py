@@ -32,6 +32,13 @@ BLUESKY_SENTIMENT = PraetorCase(
     notes="Social media sentiment — should call run_research with Bluesky tools",
 )
 
+DIRECT_WEBPAGE = PraetorCase(
+    id="direct_webpage",
+    query="Please read https://example.com/report and tell me the main claim on the page.",
+    expects_research=True,
+    notes="Direct link provided — should call fetch_webpage instead of starting with run_research",
+)
+
 CODING_QUESTION = PraetorCase(
     id="coding_question",
     query="Can you help me write a Python function to parse JSON?",
@@ -57,6 +64,7 @@ ALL_CASES: list[PraetorCase] = [
     PROTEST_ACTIVITY,
     CANDIDATE_FINANCE,
     BLUESKY_SENTIMENT,
+    DIRECT_WEBPAGE,
     CODING_QUESTION,
     MATH_QUESTION,
     CREATIVE_WRITING,

@@ -14,6 +14,7 @@ from tests.eval.fixtures.praetor_cases import (
     PROTEST_ACTIVITY,
     CANDIDATE_FINANCE,
     BLUESKY_SENTIMENT,
+    DIRECT_WEBPAGE,
     CODING_QUESTION,
     MATH_QUESTION,
     CREATIVE_WRITING,
@@ -21,6 +22,16 @@ from tests.eval.fixtures.praetor_cases import (
 )
 
 pytestmark = [pytest.mark.eval, pytest.mark.asyncio]
+
+
+async def _fetch_webpage_stub(ctx: RunContext[AgentDeps], url: str) -> str:
+    """Fetch a user-provided webpage directly and register it as a source."""
+    return (
+        "Fetched webpage: [SOURCE_1]\n"
+        "Title: Example page\n"
+        f"URL: {url}\n"
+        "Body:\nThis page claims something important."
+    )
 
 # ---------------------------------------------------------------------------
 # Criteria
@@ -74,7 +85,7 @@ def praetor_eval(request) -> Agent:
         retries=4,
     )
     inject_date(stub_agent)
-    inject_tool_list(stub_agent, ALL_RESEARCH_TOOLSET)
+    inject_tool_list(stub_agent, ALL_RESEARCH_TOOLSET, extra_tools=[_fetch_webpage_stub])
 
     @stub_agent.tool
     async def run_research(ctx: RunContext[AgentDeps], directive: str) -> str:
@@ -90,6 +101,10 @@ def praetor_eval(request) -> Agent:
     @stub_agent.tool
     async def create_research_plan(ctx: RunContext[AgentDeps], objectives: str) -> str:
         return f"Research plan acknowledged:\n{objectives}"
+
+    @stub_agent.tool
+    async def fetch_webpage(ctx: RunContext[AgentDeps], url: str) -> str:
+        return await _fetch_webpage_stub(ctx, url)
 
     return stub_agent
 
@@ -149,4 +164,22 @@ async def test_offtopic_query_skips_research(praetor_eval: Agent, case: PraetorC
         f"Notes: {case.notes}\n"
         f"Directive passed: {calls[0].args.get('directive', '') if calls else ''}\n"
         f"Output:\n{result.output}"
+    )
+
+
+@pytest.mark.parametrize("case", [DIRECT_WEBPAGE], ids=lambda c: c.id)
+async def test_direct_link_query_calls_fetch_webpage(praetor_eval: Agent, case: PraetorCase, judge: EvaluatorAgent):
+    """When a direct webpage URL is provided, Praetor should call fetch_webpage."""
+    deps = make_eval_deps(case.query)
+    async with asyncio.timeout(300):
+        result = await praetor_eval.run(user_prompt=case.query, deps=deps)
+
+    fetch_calls = get_calls_for_tool(result, "fetch_webpage")
+    assert fetch_calls, (
+        f"fetch_webpage was not called for query: '{case.query}'\n"
+        f"Notes: {case.notes}\n"
+        f"Output:\n{result.output}"
+    )
+    assert fetch_calls[0].args.get("url") == "https://example.com/report", (
+        f"fetch_webpage called with wrong URL. Args: {fetch_calls[0].args}"
     )

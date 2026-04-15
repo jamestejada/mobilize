@@ -138,14 +138,25 @@ def inject_date(agent: Agent) -> None:
         return f"Today's date is {current_date}"
 
 
-def inject_tool_list(agent: Agent, toolset) -> None:
-    """Append a dynamic tool list to agent instructions, generated from a toolset."""
+def inject_tool_list(agent: Agent, toolset, extra_tools: list | None = None) -> None:
+    """Append a dynamic tool list to agent instructions, generated from toolsets/functions."""
     lines = []
-    for ts in toolset.toolsets:
-        for tool in ts.tools.values():
-            fn = tool.function
-            first_line = (fn.__doc__ or "").strip().split("\n")[0].rstrip(".")
-            lines.append(f"- `{fn.__name__}`: {first_line}")
+
+    def _iter_tools(ts):
+        if hasattr(ts, "tools"):
+            yield from ts.tools.values()
+            return
+        if hasattr(ts, "toolsets"):
+            for child in ts.toolsets:
+                yield from _iter_tools(child)
+
+    for tool in _iter_tools(toolset):
+        fn = tool.function
+        first_line = (fn.__doc__ or "").strip().split("\n")[0].rstrip(".")
+        lines.append(f"- `{fn.__name__}`: {first_line}")
+    for fn in extra_tools or []:
+        first_line = (fn.__doc__ or "").strip().split("\n")[0].rstrip(".")
+        lines.append(f"- `{fn.__name__}`: {first_line}")
     tool_text = "\n".join(lines)
 
     @agent.instructions
@@ -657,11 +668,12 @@ class Praetor:
                 self.run_research,
                 self.get_sources,
                 self.create_research_plan,
+                self.fetch_webpage,
             ],
             retries=4,
         )
         inject_date(self.agent)
-        inject_tool_list(self.agent, ALL_RESEARCH_TOOLSET)
+        inject_tool_list(self.agent, ALL_RESEARCH_TOOLSET, extra_tools=[self.fetch_webpage])
 
     def _get_registry(self, chat_id: int) -> SourceRegistry:
         if chat_id not in self._registries:
@@ -732,6 +744,23 @@ class Praetor:
         ctx.deps.research_plan = plan
         logger.debug(f"[Praetor] Research plan created:\n{plan.summary()}")
         return plan.summary()
+
+    async def fetch_webpage(self, ctx: RunContext[AgentDeps], url: str) -> str:
+        """Fetch a user-provided webpage directly for context and citation."""
+        from .tools.fetch_url import fetch_webpage
+
+        page = await fetch_webpage(ctx, url)
+        if page is None:
+            return "Unable to fetch the webpage."
+
+        title = page.title or page.url
+        tag = f" {page.tag}" if page.tag else ""
+        return (
+            f"Fetched webpage:{tag}\n"
+            f"Title: {title}\n"
+            f"URL: {page.url}\n"
+            f"Body:\n{page.body}"
+        )
 
     async def handle_query(
                 self,

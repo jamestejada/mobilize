@@ -14,7 +14,7 @@ from src.tools.rss import (
     get_world_news_rss_feed,
 )
 from src.tools.polymarket import search_polymarket, get_polymarket_event
-from src.tools.fetch_url import fetch_url
+from src.tools.fetch_url import fetch_url, fetch_webpage
 from src.tools.sources import get_registered_sources
 from src.tools.wikipedia import search_wikipedia
 from src.tools.reddit import search_reddit_history
