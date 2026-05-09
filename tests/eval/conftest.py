@@ -148,12 +148,22 @@ def _prompt_variants(agent_name: str) -> list:
     ]
 
 
+def _prompt_variants_exact(*filenames: str) -> list:
+    """Collect specific prompt files by exact filename."""
+    return [
+        pytest.param(PROMPT_PATH.joinpath(filename).read_text(), id=f"prompt={filename}")
+        for filename in filenames
+    ]
+
+
 WRITER_PROMPT_VARIANTS = _prompt_variants("writer")
 REFLECTION_PROMPT_VARIANTS = _prompt_variants("reflection")
 GAP_ANALYSIS_PROMPT_VARIANTS = _prompt_variants("gap_analysis")
 EXPLORATOR_PROMPT_VARIANTS = _prompt_variants("explorator")
 TABULARIUS_PROMPT_VARIANTS = _prompt_variants("tabularius")
 COORDINATOR_PROMPT_VARIANTS = _prompt_variants("coordinator")
+WRITER_GEMMA_PROMPT_VARIANTS = _prompt_variants_exact("writer_gemma.md")
+COORDINATOR_GEMMA_PROMPT_VARIANTS = _prompt_variants_exact("coordinator_gemma.md")
 
 
 # ---------------------------------------------------------------------------

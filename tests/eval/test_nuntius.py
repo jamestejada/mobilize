@@ -5,9 +5,21 @@ import pytest
 
 from src.ai import Nuntius
 from src.settings import Prompts
-from tests.eval.conftest import REFLECT_WRITE_MODELS, WRITER_SETTINGS_VARIANTS, WRITER_PROMPT_VARIANTS
+from tests.eval.conftest import (
+    GEMMA4_MODEL,
+    REFLECT_WRITE_MODELS,
+    WRITER_GEMMA_PROMPT_VARIANTS,
+    WRITER_SETTINGS_VARIANTS,
+    WRITER_PROMPT_VARIANTS,
+)
 from tests.eval.evaluator import EvaluatorAgent
-from tests.eval.fixtures.nuntius_cases import WELL_SOURCED_INPUT, HIGH_SOURCE_COUNT, NuntiusCase
+from tests.eval.fixtures.nuntius_cases import (
+    ANDES_VIRUS_NARROW_QUERY,
+    HIGH_SOURCE_COUNT,
+    IRRELEVANT_SOURCE_ONLY,
+    WELL_SOURCED_INPUT,
+    NuntiusCase,
+)
 
 pytestmark = [pytest.mark.eval, pytest.mark.asyncio]
 
@@ -37,6 +49,13 @@ FAIL if the response claims it could not find information when source data was p
 PASS if the response addresses the query and draws on the source data.
 """
 
+NO_FALLBACK_SYNTHESIS_CRITERION = """
+The response must stay grounded in Source Data.
+FAIL if it uses generic background knowledge, broad educational filler, or unsupported synthesis.
+FAIL if it says things like "if you provide results", "if you share sources", or similar boilerplate.
+PASS if it answers only what the user asked using the supplied sources.
+"""
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -50,6 +69,13 @@ def _nuntius_params(models=REFLECT_WRITE_MODELS, prompts=WRITER_PROMPT_VARIANTS)
         pytest.param((model, prompt.values[0]), id=f"model={model},{prompt.id}")
         for model in models
         for prompt in prompts
+    ]
+
+
+def _gemma_nuntius_params():
+    return [
+        pytest.param((GEMMA4_MODEL, prompt.values[0]), id=f"model={GEMMA4_MODEL},{prompt.id}")
+        for prompt in WRITER_GEMMA_PROMPT_VARIANTS
     ]
 
 # ---------------------------------------------------------------------------
@@ -99,3 +125,56 @@ async def test_relevance(nuntius: Nuntius, writer_settings: dict, judge: Evaluat
     )
     result = await judge.evaluate(RELEVANCE_CRITERION, output)
     assert result.passed, f"Score: {result.score}\nReasoning: {result.reasoning}\nOutput:\n{output}"
+
+
+@pytest.mark.parametrize("nuntius", _gemma_nuntius_params(), indirect=True)
+@pytest.mark.parametrize("writer_settings", WRITER_SETTINGS_VARIANTS[:1], indirect=True)
+async def test_gemma_writer_answers_narrow_question_without_broad_overview(
+    nuntius: Nuntius, writer_settings: dict, judge: EvaluatorAgent
+):
+    """Gemma prompt should answer a narrow question directly from Source Data."""
+    output = await nuntius.write(
+        ANDES_VIRUS_NARROW_QUERY.query,
+        _build_research(ANDES_VIRUS_NARROW_QUERY),
+        model_settings=writer_settings,
+    )
+    result = await judge.evaluate(NO_FALLBACK_SYNTHESIS_CRITERION, output)
+    assert result.passed, f"Score: {result.score}\nReasoning: {result.reasoning}\nOutput:\n{output}"
+    assert "[SOURCE_" in output, f"Expected grounded citation in output:\n{output}"
+    assert "if you provide" not in output.lower(), output
+    assert "hantavirus pulmonary syndrome" not in output.lower(), output
+
+
+@pytest.mark.parametrize("nuntius", _gemma_nuntius_params(), indirect=True)
+@pytest.mark.parametrize("writer_settings", WRITER_SETTINGS_VARIANTS[:1], indirect=True)
+async def test_gemma_writer_returns_brief_insufficiency_when_relevant_sources_missing(
+    nuntius: Nuntius, writer_settings: dict
+):
+    """Gemma prompt should avoid generic synthesis when no relevant Source Data exists."""
+    output = await nuntius.write(
+        IRRELEVANT_SOURCE_ONLY.query,
+        _build_research(IRRELEVANT_SOURCE_ONLY),
+        model_settings=writer_settings,
+    )
+    lowered = output.lower()
+    assert "if you provide" not in lowered, output
+    assert "weather" not in lowered, output
+    assert "football" not in lowered, output
+    assert len(output.splitlines()) <= 3, output
+
+
+@pytest.mark.parametrize("nuntius", _gemma_nuntius_params(), indirect=True)
+@pytest.mark.parametrize("writer_settings", WRITER_SETTINGS_VARIANTS[:1], indirect=True)
+async def test_gemma_writer_andes_virus_regression_uses_only_source_data(
+    nuntius: Nuntius, writer_settings: dict
+):
+    """Regression: Andes virus query should stay narrowly grounded in the provided sources."""
+    output = await nuntius.write(
+        ANDES_VIRUS_NARROW_QUERY.query,
+        _build_research(ANDES_VIRUS_NARROW_QUERY),
+        model_settings=writer_settings,
+    )
+    lowered = output.lower()
+    assert "the available sources say" not in lowered, output
+    assert "if you share" not in lowered, output
+    assert "only hantavirus known to spread from person to person" in lowered or "[source_" in lowered, output

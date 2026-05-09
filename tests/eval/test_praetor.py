@@ -7,7 +7,14 @@ from pydantic_ai import Agent, RunContext
 from src.ai import AgentDeps, inject_date, inject_tool_list
 from src.agent_settings import AgentsConfiguration
 from src.tools import ALL_RESEARCH_TOOLSET
-from tests.eval.conftest import COORDINATE_MODELS, COORDINATOR_PROMPT_VARIANTS, _make_ollama_model, make_eval_deps
+from tests.eval.conftest import (
+    COORDINATE_MODELS,
+    COORDINATOR_GEMMA_PROMPT_VARIANTS,
+    COORDINATOR_PROMPT_VARIANTS,
+    GEMMA4_MODEL,
+    _make_ollama_model,
+    make_eval_deps,
+)
 from tests.eval.evaluator import EvaluatorAgent
 from tests.eval.tool_helpers import get_calls_for_tool
 from tests.eval.fixtures.praetor_cases import (
@@ -70,6 +77,13 @@ def _praetor_params():
         pytest.param((model, prompt.values[0]), id=f"model={model},{prompt.id}")
         for model in COORDINATE_MODELS
         for prompt in COORDINATOR_PROMPT_VARIANTS
+    ]
+
+
+def _gemma_praetor_params():
+    return [
+        pytest.param((GEMMA4_MODEL, prompt.values[0]), id=f"model={GEMMA4_MODEL},{prompt.id}")
+        for prompt in COORDINATOR_GEMMA_PROMPT_VARIANTS
     ]
 
 
@@ -183,3 +197,66 @@ async def test_direct_link_query_calls_fetch_webpage(praetor_eval: Agent, case: 
     assert fetch_calls[0].args.get("url") == "https://example.com/report", (
         f"fetch_webpage called with wrong URL. Args: {fetch_calls[0].args}"
     )
+
+
+@pytest.fixture(params=_gemma_praetor_params())
+def praetor_gemma_eval(request) -> Agent:
+    model_name, instructions = request.param
+    stub_agent = Agent(
+        model=_make_ollama_model(model_name),
+        instructions=instructions,
+        deps_type=AgentDeps,
+        output_type=str,
+        model_settings=AgentsConfiguration.PRAETOR.model_settings,
+        retries=4,
+    )
+    inject_date(stub_agent)
+    inject_tool_list(stub_agent, ALL_RESEARCH_TOOLSET, extra_tools=[_fetch_webpage_stub])
+
+    @stub_agent.tool
+    async def run_research(ctx: RunContext[AgentDeps], directive: str) -> str:
+        return (
+            "Research complete.\n\n[STUB] No real research was performed.\n\n"
+            "If this reveals important leads, call run_research again. Otherwise stop."
+        )
+
+    @stub_agent.tool
+    async def get_sources(ctx: RunContext[AgentDeps]) -> str:
+        return "No sources collected yet."
+
+    @stub_agent.tool
+    async def create_research_plan(ctx: RunContext[AgentDeps], objectives: str) -> str:
+        return f"Research plan acknowledged:\n{objectives}"
+
+    @stub_agent.tool
+    async def fetch_webpage(ctx: RunContext[AgentDeps], url: str) -> str:
+        return await _fetch_webpage_stub(ctx, url)
+
+    return stub_agent
+
+
+@pytest.mark.parametrize("case", [PROTEST_ACTIVITY, CANDIDATE_FINANCE, BLUESKY_SENTIMENT], ids=lambda c: c.id)
+async def test_gemma_coordinator_research_queries_end_with_exact_completion_marker(
+    praetor_gemma_eval: Agent, case: PraetorCase
+):
+    """Gemma prompt must call research and then output exactly 'Research complete.'."""
+    deps = make_eval_deps(case.query)
+    async with asyncio.timeout(300):
+        result = await praetor_gemma_eval.run(user_prompt=case.query, deps=deps)
+    calls = get_calls_for_tool(result, "run_research")
+    assert calls, f"Expected run_research call for query '{case.query}'. Output:\n{result.output}"
+    assert result.output == "Research complete.", (
+        f"Expected exact completion marker after research.\n"
+        f"Query: {case.query}\nOutput:\n{result.output}"
+    )
+
+
+@pytest.mark.parametrize("case", [PROTEST_ACTIVITY], ids=lambda c: c.id)
+async def test_gemma_coordinator_does_not_narrate_research_process(
+    praetor_gemma_eval: Agent, case: PraetorCase
+):
+    """Gemma prompt should not explain its intended workflow in the final output."""
+    deps = make_eval_deps(case.query)
+    async with asyncio.timeout(300):
+        result = await praetor_gemma_eval.run(user_prompt=case.query, deps=deps)
+    assert result.output == "Research complete.", result.output

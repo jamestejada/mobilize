@@ -9,7 +9,6 @@ from typing import Callable, Awaitable, Dict, List
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import UnexpectedModelBehavior, ModelHTTPError
 from .settings import (
-        Prompts,
         LOG_DIR
     )
 from .agent_settings import AgentsConfiguration
@@ -254,7 +253,7 @@ class Explorator:
         self.agent = Agent(
             model=model or AgentsConfiguration.EXPLORATOR.make_model(),
             deps_type=AgentDeps,
-            instructions=instructions if instructions is not None else Prompts.EXPLORATOR,
+            instructions=instructions if instructions is not None else AgentsConfiguration.EXPLORATOR.instructions,
             toolsets=[EXPLORATOR_AGENT_TOOLSET],
             model_settings=AgentsConfiguration.EXPLORATOR.model_settings,
             retries=2,
@@ -294,7 +293,7 @@ class Tabularius:
         self.agent = Agent(
             model=model or AgentsConfiguration.TABULARIUS.make_model(),
             deps_type=AgentDeps,
-            instructions=instructions if instructions is not None else Prompts.TABULARIUS,
+            instructions=instructions if instructions is not None else AgentsConfiguration.TABULARIUS.instructions,
             toolsets=[TABULARIUS_AGENT_TOOLSET],
             model_settings=AgentsConfiguration.TABULARIUS.model_settings,
             retries=2,
@@ -332,7 +331,7 @@ class Nuntius:
     def __init__(self, model=None, instructions: str | None = None):
         self.agent = Agent(
             model=model or AgentsConfiguration.NUNTIUS.make_model(),
-            instructions=instructions if instructions is not None else Prompts.WRITER
+            instructions=instructions if instructions is not None else AgentsConfiguration.NUNTIUS.instructions
         )
         inject_date(agent=self.agent)
 
@@ -357,7 +356,7 @@ class Cogitator:
     def __init__(self, model=None, instructions: str | None = None):
         self.agent = Agent(
             model=model or AgentsConfiguration.COGITATOR.make_model(),
-            instructions=instructions if instructions is not None else Prompts.REFLECTION
+            instructions=instructions if instructions is not None else AgentsConfiguration.COGITATOR.instructions
         )
         inject_date(agent=self.agent)
 
@@ -380,7 +379,7 @@ class Probator:
     def __init__(self, model=None, instructions: str | None = None):
         self.agent = Agent(
             model=model or AgentsConfiguration.PROBATOR.make_model(),
-            instructions=instructions if instructions is not None else Prompts.GAP_ANALYSIS
+            instructions=instructions if instructions is not None else AgentsConfiguration.PROBATOR.instructions
         )
         inject_date(agent=self.agent)
 
@@ -661,7 +660,7 @@ class Praetor:
         from .tools import ALL_RESEARCH_TOOLSET
         self.agent = Agent(
             model=AgentsConfiguration.PRAETOR.make_model(),
-            instructions=Prompts.COORDINATOR,
+            instructions=AgentsConfiguration.PRAETOR.instructions,
             deps_type=AgentDeps,
             output_type=str,
             tools=[

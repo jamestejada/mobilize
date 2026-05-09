@@ -37,15 +37,6 @@ class RSS:
     WORLD_NEWS_JSON = json.loads(WORLD_NEWS.read_text())
 
 
-class Prompts:
-    COORDINATOR = PROMPT_PATH.joinpath(os.getenv("COORDINATOR_PROMPT", "coordinator.md")).read_text()
-    REFLECTION = PROMPT_PATH.joinpath(os.getenv("REFLECTION_PROMPT", "reflection.md")).read_text()
-    EXPLORATOR = PROMPT_PATH.joinpath(os.getenv("EXPLORATOR_PROMPT", "explorator.md")).read_text()
-    TABULARIUS = PROMPT_PATH.joinpath(os.getenv("TABULARIUS_PROMPT", "tabularius.md")).read_text()
-    WRITER = PROMPT_PATH.joinpath(os.getenv("WRITER_PROMPT", "writer.md")).read_text()
-    GAP_ANALYSIS = PROMPT_PATH.joinpath(os.getenv("GAP_ANALYSIS_PROMPT", "gap_analysis.md")).read_text()
-
-
 class OllamaEndpoints:
     API_ROOT = yarl.URL(os.getenv("OLLAMA_ROOT_URL"))
     CHAT = API_ROOT.joinpath("v1")

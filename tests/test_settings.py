@@ -120,3 +120,4 @@ class TestLogDir:
         import src.settings as settings
         importlib.reload(settings)
         assert settings.LOG_DIR.exists()
+

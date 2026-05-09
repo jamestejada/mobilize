@@ -1,12 +1,13 @@
 import os
 from dataclasses import dataclass, field
 
-from .settings import OLLAMA_NUM_CTX, OllamaEndpoints
+from .settings import OLLAMA_NUM_CTX, OllamaEndpoints, PROMPT_PATH
 
 
 @dataclass
 class AgentSettings:
     model: str
+    prompt_file: str
     think: bool
     temperature: float
     top_p: float = 0.7
@@ -29,6 +30,10 @@ class AgentSettings:
             body["think"] = False
         return {"extra_body": body}
 
+    @property
+    def instructions(self) -> str:
+        return PROMPT_PATH.joinpath(self.prompt_file).read_text()
+
     def make_model(self):
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.ollama import OllamaProvider
@@ -44,33 +49,39 @@ class AgentSettings:
 
 class AgentsConfiguration:
     PRAETOR = AgentSettings(
-            model=os.getenv("PRAETOR_MODEL", "qwen3.5:latest"),
+            model=os.getenv("PRAETOR_MODEL", "gemma4:latest"),
+            prompt_file=os.getenv("COORDINATOR_PROMPT", "coordinator_gemma.md"),
             think=True,
             temperature=0.1
         )
     EXPLORATOR = AgentSettings(
-            model=os.getenv("EXPLORATOR_MODEL", "qwen3:8b-q4_K_M"),
+            model=os.getenv("EXPLORATOR_MODEL", "gemma4:latest"),
+            prompt_file=os.getenv("EXPLORATOR_PROMPT", "explorator_gemma.md"),
             think=False,
             temperature=0.1
         )
     TABULARIUS = AgentSettings(
-            model=os.getenv("TABULARIUS_MODEL", "hermes3:8b"),
+            model=os.getenv("TABULARIUS_MODEL", "gemma4:latest"),
+            prompt_file=os.getenv("TABULARIUS_PROMPT", "tabularius_gemma.md"),
             think=False,
             temperature=0.1
         )
     NUNTIUS = AgentSettings(
-            model=os.getenv("NUNTIUS_MODEL", "qwen3:14b"),
+            model=os.getenv("NUNTIUS_MODEL", "gemma4:latest"),
+            prompt_file=os.getenv("WRITER_PROMPT", "writer_gemma.md"),
             think=True,
             temperature=0.35,
             top_p=0.9
         )
     COGITATOR = AgentSettings(
-            model=os.getenv("COGITATOR_MODEL", "qwen3.5:latest"),
+            model=os.getenv("COGITATOR_MODEL", "qwen3:14b"),
+            prompt_file=os.getenv("REFLECTION_PROMPT", "reflection.md"),
             think=False,
             temperature=0.1
         )
     PROBATOR = AgentSettings(
-            model=os.getenv("PROBATOR_MODEL", "qwen3:14b"),
-            think=True,
+            model=os.getenv("PROBATOR_MODEL", "gemma4:latest"),
+            prompt_file=os.getenv("GAP_ANALYSIS_PROMPT", "gap_analysis_gemma.md"),
+            think=False,
             temperature=0.1
         )

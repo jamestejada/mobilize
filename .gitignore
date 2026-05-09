@@ -14,10 +14,11 @@ wheels/
 .codex/
 .codex
 .agent_artifacts/
-
+.agents/
 prompts/
 rss_feeds/
 
+# Log files
 logs/
 
 # pytest cache

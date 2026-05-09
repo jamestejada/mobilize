@@ -50,7 +50,37 @@ Third major climate event this year in Portland; next rally planned for June."""
     notes="Multiple corroborated sources; output should use all three",
 )
 
+ANDES_VIRUS_NARROW_QUERY = NuntiusCase(
+    id="andes_virus_person_to_person",
+    query="Does Andes virus spread person to person?",
+    source_data="""Source Data (use [SOURCE_N] tags to cite):
+
+[search_web]:
+- [SOURCE_1] CDC Hantavirus Overview [via CDC] [HIGH]: \
+Andes virus is the only hantavirus known to spread from person to person, though this is rare and has mainly been documented in Argentina and Chile.
+- [SOURCE_2] PAHO Andes Virus Alert [via PAHO] [HIGH]: \
+Health authorities note limited person-to-person transmission of Andes virus in close-contact settings.""",
+    research_findings="""Andes virus differs from most hantaviruses because person-to-person spread has been documented.""",
+    notes="Regression case: answer the narrow question directly, without a broad hantavirus overview",
+)
+
+IRRELEVANT_SOURCE_ONLY = NuntiusCase(
+    id="irrelevant_source_only",
+    query="What did the mayor say about the transit strike?",
+    source_data="""Source Data (use [SOURCE_N] tags to cite):
+
+[search_news]:
+- [SOURCE_1] Weather Alert [via AP News] [HIGH]: \
+Heavy rain is expected across the region this weekend.
+- [SOURCE_2] Sports Brief [via Reuters] [MEDIUM]: \
+The city football club won 2-1 on Saturday.""",
+    research_findings="""No verified findings about the mayor or the transit strike were collected.""",
+    notes="Relevant Source Data is absent; writer should give a short insufficiency response",
+)
+
 ALL_CASES: list[NuntiusCase] = [
     WELL_SOURCED_INPUT,
     HIGH_SOURCE_COUNT,
+    ANDES_VIRUS_NARROW_QUERY,
+    IRRELEVANT_SOURCE_ONLY,
 ]
