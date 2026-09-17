@@ -106,12 +106,17 @@ async def test_calls_court_cases_tool(tabularius: Tabularius, judge: EvaluatorAg
 
 @pytest.mark.parametrize("tabularius", _tabularius_params(), indirect=True)
 async def test_rss_two_step_lists_then_fetches(tabularius: Tabularius, judge: EvaluatorAgent):
-    """Must call get_gov_rss_feed at least twice: once to discover feed names, once to fetch."""
+    """Must list feed names first, then fetch exactly one with a real feed_name."""
     result, _ = await _run_case(tabularius, RSS_FEED_TWO_STEP)
-    rss_calls = get_calls_for_tool(result, "get_gov_rss_feed")
-    assert len(rss_calls) >= 2, (
-        f"Expected get_gov_rss_feed called at least twice (discover + fetch), "
-        f"got {len(rss_calls)} call(s).\nOutput:\n{result.output}"
+    list_calls = get_calls_for_tool(result, "list_gov_rss_feeds")
+    fetch_calls = get_calls_for_tool(result, "get_gov_rss_feed")
+    assert list_calls, (
+        f"Expected list_gov_rss_feeds to be called before get_gov_rss_feed.\n"
+        f"Output:\n{result.output}"
+    )
+    assert fetch_calls and any(inv.args.get("feed_name") for inv in fetch_calls), (
+        f"Expected get_gov_rss_feed called with a non-empty feed_name after discovery, "
+        f"got: {[inv.args for inv in fetch_calls]}\nOutput:\n{result.output}"
     )
     eval_result = await judge.evaluate(RSS_TWO_STEP_CRITERION, result.output)
     assert eval_result.passed, (

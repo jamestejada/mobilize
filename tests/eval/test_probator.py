@@ -4,7 +4,6 @@ import asyncio
 import pytest
 
 from src.ai import Probator
-from src.settings import Prompts
 from tests.eval.conftest import COORDINATE_MODELS, REVIEWER_SETTINGS_VARIANTS, GAP_ANALYSIS_PROMPT_VARIANTS
 from tests.eval.evaluator import EvaluatorAgent
 from tests.eval.fixtures.probator_cases import (

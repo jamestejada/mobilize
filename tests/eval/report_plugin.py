@@ -19,6 +19,16 @@ from pathlib import Path
 # Parsing
 # ---------------------------------------------------------------------------
 
+def _param_field(params_str: str, key: str) -> str | None:
+    """Extract a `key=value` field from a pytest param id, correctly handling
+    values that themselves contain hyphens (e.g. model=qwen2.5:14b-instruct-q4_k_m).
+    Fields are comma-separated (the convention used throughout tests/eval params),
+    so a value runs until the next `,` or the end of the id.
+    """
+    m = re.search(rf"(?:^|,){re.escape(key)}=([^,]+)", params_str)
+    return m.group(1).strip() if m else None
+
+
 def _parse_node(nodeid: str, outcome: str, call: dict | None) -> dict:
     parts = nodeid.split("::")
     module = Path(parts[0]).stem.replace("test_", "")
@@ -31,15 +41,23 @@ def _parse_node(nodeid: str, outcome: str, call: dict | None) -> dict:
         func = rest
         params_str = ""
 
-    model_m = re.search(r"model=([^,\]\-][^\-\]]*)", params_str)
-    temp_m = re.search(r"temp=([^,\]]+)", params_str)
+    # Stacked @pytest.mark.parametrize decorators join their ids with "-", e.g.
+    # "temp=0.1,top_p=0.7-model=qwen3:14b,prompt=reflection.md". Model/quant names
+    # never contain the literal substring "model=", so this rewrite is always safe
+    # and lets a single comma-based key=value scan handle every joined dimension.
+    params_str = re.sub(r"-(model|prompt|temp|top_p|think|repeat)=", r",\1=", params_str)
 
     return {
         "module": module,
         "func": func,
-        "model": model_m.group(1).strip() if model_m else "—",
-        "temp": temp_m.group(1).strip() if temp_m else "—",
+        "model": _param_field(params_str, "model") or "—",
+        "prompt": _param_field(params_str, "prompt") or "—",
+        "temp": _param_field(params_str, "temp") or "—",
+        "top_p": _param_field(params_str, "top_p") or "—",
+        "think": _param_field(params_str, "think") or "—",
+        "repeat": (re.search(r"(?:^|,)(run\d+)(?:,|$)", params_str) or [None, "—"])[1],
         "outcome": outcome,
+        "duration": (call or {}).get("duration", 0),
         "longrepr": (call or {}).get("longrepr", ""),
     }
 
@@ -103,51 +121,68 @@ def _overall(tests: list[dict]) -> str:
     )
 
 
+def _duration(p: dict) -> float:
+    return p.get("duration", 0)
+
+
+def _n_note(n: int) -> str:
+    """Flag cells too thin to trust a pass-rate comparison on (judge tests are noisy)."""
+    return "" if n >= 5 else f" (n={n}, low confidence)"
+
+
 def _by_model(parsed: list[dict]) -> str:
-    counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    counts: dict[str, list] = defaultdict(lambda: [0, 0, 0.0])
     for p in parsed:
-        counts[p["model"]][1] += 1
+        c = counts[p["model"]]
+        c[1] += 1
+        c[2] += _duration(p)
         if p["outcome"] == "passed":
-            counts[p["model"]][0] += 1
+            c[0] += 1
 
     rows = sorted(counts.items(), key=lambda x: -(x[1][0] / x[1][1]) if x[1][1] else 0)
     return _table(
-        ["Model", "Pass", "Fail", "Rate", ""],
-        [[m, str(pa), str(tot - pa), _rate(pa, tot), _bar(pa, tot)]
-         for m, (pa, tot) in rows],
-        right_cols={1, 2},
+        ["Model", "Pass", "Fail", "Rate", "Avg time", ""],
+        [[m, str(pa), str(tot - pa), _rate(pa, tot) + _n_note(tot),
+          f"{dur / tot:.1f}s" if tot else "—", _bar(pa, tot)]
+         for m, (pa, tot, dur) in rows],
+        right_cols={1, 2, 4},
     )
 
 
 def _by_agent(parsed: list[dict]) -> str:
-    counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    counts: dict[str, list] = defaultdict(lambda: [0, 0, 0.0])
     for p in parsed:
-        counts[p["module"]][1] += 1
+        c = counts[p["module"]]
+        c[1] += 1
+        c[2] += _duration(p)
         if p["outcome"] == "passed":
-            counts[p["module"]][0] += 1
+            c[0] += 1
 
     rows = sorted(counts.items(), key=lambda x: -(x[1][0] / x[1][1]) if x[1][1] else 0)
     return _table(
-        ["Agent", "Pass", "Fail", "Rate", ""],
-        [[a, str(pa), str(tot - pa), _rate(pa, tot), _bar(pa, tot)]
-         for a, (pa, tot) in rows],
-        right_cols={1, 2},
+        ["Agent", "Pass", "Fail", "Rate", "Avg time", ""],
+        [[a, str(pa), str(tot - pa), _rate(pa, tot), f"{dur / tot:.1f}s" if tot else "—", _bar(pa, tot)]
+         for a, (pa, tot, dur) in rows],
+        right_cols={1, 2, 4},
     )
 
 
 def _by_test(parsed: list[dict]) -> str:
-    counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    counts: dict[str, list] = defaultdict(lambda: [0, 0, 0.0])
     for p in parsed:
         key = f"{p['module']}::{p['func']}"
-        counts[key][1] += 1
+        c = counts[key]
+        c[1] += 1
+        c[2] += _duration(p)
         if p["outcome"] == "passed":
-            counts[key][0] += 1
+            c[0] += 1
 
     rows = sorted(counts.items(), key=lambda x: -(x[1][0] / x[1][1]) if x[1][1] else 0)
     return _table(
-        ["Test", "Pass", "Fail", "Rate"],
-        [[t, str(pa), str(tot - pa), _rate(pa, tot)] for t, (pa, tot) in rows],
-        right_cols={1, 2},
+        ["Test", "Pass", "Fail", "Rate", "Avg time"],
+        [[t, str(pa), str(tot - pa), _rate(pa, tot), f"{dur / tot:.1f}s" if tot else "—"]
+         for t, (pa, tot, dur) in rows],
+        right_cols={1, 2, 4},
     )
 
 
@@ -167,12 +202,36 @@ def _model_agent_crosstab(parsed: list[dict]) -> str:
     rows = []
     for m in models:
         row = [m] + [
-            _rate(counts[m][a][0], counts[m][a][1]) if counts[m][a][1] else "—"
+            (_rate(counts[m][a][0], counts[m][a][1]) + f" n={counts[m][a][1]}")
+            if counts[m][a][1] else "—"
             for a in agents
         ]
         rows.append(row)
 
     return _table(["Model"] + agents, rows)
+
+
+def _by_model_prompt(parsed: list[dict]) -> str:
+    """Model x prompt breakdown — the built-in model/agent tables above collapse
+    prompt variants together, which hides regressions like reflection_gemma.md."""
+    counts: dict[tuple, list] = defaultdict(lambda: [0, 0, 0.0])
+    for p in parsed:
+        if p["prompt"] == "—":
+            continue
+        key = (p["module"], p["model"], p["prompt"])
+        c = counts[key]
+        c[1] += 1
+        c[2] += _duration(p)
+        if p["outcome"] == "passed":
+            c[0] += 1
+
+    rows = sorted(counts.items(), key=lambda x: -(x[1][0] / x[1][1]) if x[1][1] else 0)
+    return _table(
+        ["Agent", "Model", "Prompt", "Pass", "Fail", "Rate", "Avg time"],
+        [[a, m, pr, str(pa), str(tot - pa), _rate(pa, tot) + _n_note(tot), f"{dur / tot:.1f}s" if tot else "—"]
+         for (a, m, pr), (pa, tot, dur) in rows],
+        right_cols={3, 4, 6},
+    )
 
 
 def _failures(parsed: list[dict]) -> str:
@@ -218,8 +277,10 @@ def build_report(path: str) -> str:
         _by_model(parsed),
         _section("BY AGENT"),
         _by_agent(parsed),
-        _section("MODEL × AGENT  (pass rate)"),
+        _section("MODEL × AGENT  (pass rate, n=samples)"),
         _model_agent_crosstab(parsed),
+        _section("BY AGENT × MODEL × PROMPT"),
+        _by_model_prompt(parsed),
         _section("BY TEST FUNCTION"),
         _by_test(parsed),
         _section("FAILURES"),

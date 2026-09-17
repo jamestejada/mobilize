@@ -199,8 +199,25 @@ async def test_direct_link_query_calls_fetch_webpage(praetor_eval: Agent, case: 
     )
 
 
-@pytest.fixture(params=_gemma_praetor_params())
-def praetor_gemma_eval(request) -> Agent:
+def _all_coordinator_prompt_params():
+    """Coordinator prompt variants across all coordinate models, plus the gemma-specific
+    prompt for gemma4 only (that prompt file only ever makes sense paired with gemma4).
+    Both `coordinator.md` and `coordinator_gemma.md` state the same 'Research complete.'
+    exact-output contract, so these tests were never gemma-specific in intent — they just
+    were never run against the other coordinator models. See
+    given-the-model-setting-evaluation-rosy-shannon.md Phase 4."""
+    return [
+        pytest.param((model, prompt.values[0]), id=f"model={model},{prompt.id}")
+        for model in COORDINATE_MODELS
+        for prompt in COORDINATOR_PROMPT_VARIANTS
+    ] + [
+        pytest.param((GEMMA4_MODEL, prompt.values[0]), id=f"model={GEMMA4_MODEL},{prompt.id}")
+        for prompt in COORDINATOR_GEMMA_PROMPT_VARIANTS
+    ]
+
+
+@pytest.fixture(params=_all_coordinator_prompt_params())
+def praetor_completion_eval(request) -> Agent:
     model_name, instructions = request.param
     stub_agent = Agent(
         model=_make_ollama_model(model_name),
@@ -236,13 +253,13 @@ def praetor_gemma_eval(request) -> Agent:
 
 
 @pytest.mark.parametrize("case", [PROTEST_ACTIVITY, CANDIDATE_FINANCE, BLUESKY_SENTIMENT], ids=lambda c: c.id)
-async def test_gemma_coordinator_research_queries_end_with_exact_completion_marker(
-    praetor_gemma_eval: Agent, case: PraetorCase
+async def test_coordinator_research_queries_end_with_exact_completion_marker(
+    praetor_completion_eval: Agent, case: PraetorCase
 ):
-    """Gemma prompt must call research and then output exactly 'Research complete.'."""
+    """Must call research and then output exactly 'Research complete.'."""
     deps = make_eval_deps(case.query)
     async with asyncio.timeout(300):
-        result = await praetor_gemma_eval.run(user_prompt=case.query, deps=deps)
+        result = await praetor_completion_eval.run(user_prompt=case.query, deps=deps)
     calls = get_calls_for_tool(result, "run_research")
     assert calls, f"Expected run_research call for query '{case.query}'. Output:\n{result.output}"
     assert result.output == "Research complete.", (
@@ -252,11 +269,11 @@ async def test_gemma_coordinator_research_queries_end_with_exact_completion_mark
 
 
 @pytest.mark.parametrize("case", [PROTEST_ACTIVITY], ids=lambda c: c.id)
-async def test_gemma_coordinator_does_not_narrate_research_process(
-    praetor_gemma_eval: Agent, case: PraetorCase
+async def test_coordinator_does_not_narrate_research_process(
+    praetor_completion_eval: Agent, case: PraetorCase
 ):
-    """Gemma prompt should not explain its intended workflow in the final output."""
+    """Should not explain its intended workflow in the final output."""
     deps = make_eval_deps(case.query)
     async with asyncio.timeout(300):
-        result = await praetor_gemma_eval.run(user_prompt=case.query, deps=deps)
+        result = await praetor_completion_eval.run(user_prompt=case.query, deps=deps)
     assert result.output == "Research complete.", result.output

@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from src.ai import Cogitator
-from src.settings import Prompts
 from tests.eval.conftest import REFLECT_WRITE_MODELS, REVIEWER_SETTINGS_VARIANTS, REFLECTION_PROMPT_VARIANTS
 from tests.eval.evaluator import EvaluatorAgent
 from tests.eval.fixtures.cogitator_cases import (

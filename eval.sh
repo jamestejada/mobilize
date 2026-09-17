@@ -7,11 +7,16 @@ if [ -f .env ]; then
 fi
 
 usage() {
-    echo "Usage: $0 {eval [agent]|review [file]}"
+    echo "Usage: $0 {eval [agent] [-- pytest-args]|review [file]}"
     echo ""
     echo "  eval [agent]  Run the eval test suite, save results to logs/eval/eval_TIMESTAMP.json"
     echo "                Optionally filter to a single agent: praetor, explorator, tabularius,"
     echo "                nuntius, cogitator, probator"
+    echo "                Extra args pass through to pytest, e.g.:"
+    echo "                  ./eval.sh eval cogitator --eval-repeats=5"
+    echo "                --eval-repeats=N runs each judge-graded test N times (default 1)."
+    echo "                Judge (LLM-graded) tests are noisy at n=1 — use N>=5 before"
+    echo "                trusting a pass-rate comparison between models/prompts."
     echo "  review [file] Print model comparison tables from the latest (or given) result file"
     exit 1
 }

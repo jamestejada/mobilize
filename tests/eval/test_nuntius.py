@@ -4,7 +4,6 @@ import re
 import pytest
 
 from src.ai import Nuntius
-from src.settings import Prompts
 from tests.eval.conftest import (
     GEMMA4_MODEL,
     REFLECT_WRITE_MODELS,
@@ -72,8 +71,13 @@ def _nuntius_params(models=REFLECT_WRITE_MODELS, prompts=WRITER_PROMPT_VARIANTS)
     ]
 
 
-def _gemma_nuntius_params():
-    return [
+def _grounding_nuntius_params():
+    """Writer prompt variants across all writer models, plus the gemma-specific writer
+    prompt for gemma4 only. These grounding-regression tests assert generic behavior
+    (no fallback synthesis, no raw URLs, stays on-topic) that isn't gemma-specific in
+    intent — they were just never run against the other writer models/prompts. See
+    given-the-model-setting-evaluation-rosy-shannon.md Phase 4."""
+    return _nuntius_params() + [
         pytest.param((GEMMA4_MODEL, prompt.values[0]), id=f"model={GEMMA4_MODEL},{prompt.id}")
         for prompt in WRITER_GEMMA_PROMPT_VARIANTS
     ]
@@ -127,12 +131,12 @@ async def test_relevance(nuntius: Nuntius, writer_settings: dict, judge: Evaluat
     assert result.passed, f"Score: {result.score}\nReasoning: {result.reasoning}\nOutput:\n{output}"
 
 
-@pytest.mark.parametrize("nuntius", _gemma_nuntius_params(), indirect=True)
+@pytest.mark.parametrize("nuntius", _grounding_nuntius_params(), indirect=True)
 @pytest.mark.parametrize("writer_settings", WRITER_SETTINGS_VARIANTS[:1], indirect=True)
-async def test_gemma_writer_answers_narrow_question_without_broad_overview(
+async def test_writer_answers_narrow_question_without_broad_overview(
     nuntius: Nuntius, writer_settings: dict, judge: EvaluatorAgent
 ):
-    """Gemma prompt should answer a narrow question directly from Source Data."""
+    """Should answer a narrow question directly from Source Data."""
     output = await nuntius.write(
         ANDES_VIRUS_NARROW_QUERY.query,
         _build_research(ANDES_VIRUS_NARROW_QUERY),
@@ -145,12 +149,12 @@ async def test_gemma_writer_answers_narrow_question_without_broad_overview(
     assert "hantavirus pulmonary syndrome" not in output.lower(), output
 
 
-@pytest.mark.parametrize("nuntius", _gemma_nuntius_params(), indirect=True)
+@pytest.mark.parametrize("nuntius", _grounding_nuntius_params(), indirect=True)
 @pytest.mark.parametrize("writer_settings", WRITER_SETTINGS_VARIANTS[:1], indirect=True)
-async def test_gemma_writer_returns_brief_insufficiency_when_relevant_sources_missing(
+async def test_writer_returns_brief_insufficiency_when_relevant_sources_missing(
     nuntius: Nuntius, writer_settings: dict
 ):
-    """Gemma prompt should avoid generic synthesis when no relevant Source Data exists."""
+    """Should avoid generic synthesis when no relevant Source Data exists."""
     output = await nuntius.write(
         IRRELEVANT_SOURCE_ONLY.query,
         _build_research(IRRELEVANT_SOURCE_ONLY),
@@ -163,9 +167,9 @@ async def test_gemma_writer_returns_brief_insufficiency_when_relevant_sources_mi
     assert len(output.splitlines()) <= 3, output
 
 
-@pytest.mark.parametrize("nuntius", _gemma_nuntius_params(), indirect=True)
+@pytest.mark.parametrize("nuntius", _grounding_nuntius_params(), indirect=True)
 @pytest.mark.parametrize("writer_settings", WRITER_SETTINGS_VARIANTS[:1], indirect=True)
-async def test_gemma_writer_andes_virus_regression_uses_only_source_data(
+async def test_writer_andes_virus_regression_uses_only_source_data(
     nuntius: Nuntius, writer_settings: dict
 ):
     """Regression: Andes virus query should stay narrowly grounded in the provided sources."""

@@ -48,27 +48,34 @@ class AgentSettings:
 
 
 class AgentsConfiguration:
+    # Model selection is based on tests/eval sweeps in logs/eval/ — see the plan at
+    # given-the-model-setting-evaluation-rosy-shannon.md for the evidence and rationale.
+    # Praetor is kept on a different model (qwen3.5) than the rest of the pipeline
+    # (qwen3:14b) deliberately: it is the single biggest quality lever measured, and
+    # putting the other five agents on one shared model limits VRAM swapping to one
+    # boundary per query (Praetor in, Praetor out) instead of thrashing between models
+    # on every Nuntius/Cogitator review iteration.
     PRAETOR = AgentSettings(
-            model=os.getenv("PRAETOR_MODEL", "gemma4:latest"),
-            prompt_file=os.getenv("COORDINATOR_PROMPT", "coordinator_gemma.md"),
+            model=os.getenv("PRAETOR_MODEL", "qwen3.5:latest"),
+            prompt_file=os.getenv("COORDINATOR_PROMPT", "coordinator.md"),
             think=True,
             temperature=0.1
         )
     EXPLORATOR = AgentSettings(
-            model=os.getenv("EXPLORATOR_MODEL", "gemma4:latest"),
-            prompt_file=os.getenv("EXPLORATOR_PROMPT", "explorator_gemma.md"),
+            model=os.getenv("EXPLORATOR_MODEL", "qwen3:14b"),
+            prompt_file=os.getenv("EXPLORATOR_PROMPT", "explorator.md"),
             think=False,
             temperature=0.1
         )
     TABULARIUS = AgentSettings(
-            model=os.getenv("TABULARIUS_MODEL", "gemma4:latest"),
-            prompt_file=os.getenv("TABULARIUS_PROMPT", "tabularius_gemma.md"),
+            model=os.getenv("TABULARIUS_MODEL", "qwen3:14b"),
+            prompt_file=os.getenv("TABULARIUS_PROMPT", "tabularius.md"),
             think=False,
             temperature=0.1
         )
     NUNTIUS = AgentSettings(
-            model=os.getenv("NUNTIUS_MODEL", "gemma4:latest"),
-            prompt_file=os.getenv("WRITER_PROMPT", "writer_gemma.md"),
+            model=os.getenv("NUNTIUS_MODEL", "qwen3:14b"),
+            prompt_file=os.getenv("WRITER_PROMPT", "writer.md"),
             think=True,
             temperature=0.35,
             top_p=0.9
@@ -80,8 +87,8 @@ class AgentsConfiguration:
             temperature=0.1
         )
     PROBATOR = AgentSettings(
-            model=os.getenv("PROBATOR_MODEL", "gemma4:latest"),
-            prompt_file=os.getenv("GAP_ANALYSIS_PROMPT", "gap_analysis_gemma.md"),
+            model=os.getenv("PROBATOR_MODEL", "qwen3:14b"),
+            prompt_file=os.getenv("GAP_ANALYSIS_PROMPT", "gap_analysis.md"),
             think=False,
             temperature=0.1
         )

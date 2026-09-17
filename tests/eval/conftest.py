@@ -15,7 +15,7 @@ from src.ai import (
     AgentDeps,
 )
 from src.agent_settings import AgentsConfiguration
-from src.settings import OllamaEndpoints, Prompts, OLLAMA_NUM_CTX, PROMPT_PATH
+from src.settings import OllamaEndpoints, OLLAMA_NUM_CTX, PROMPT_PATH
 from src.ollama_transport import ollama_http_client
 from src.source_registry import SourceRegistry
 from tests.eval.evaluator import EvaluatorAgent
@@ -51,6 +51,46 @@ class _IncrementalWriter:
 
 def pytest_configure(config):
     config.pluginmanager.register(_IncrementalWriter(), "_incremental_writer")
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--eval-repeats",
+        type=int,
+        default=1,
+        help="Run each eval-marked test this many times (independent samples per "
+             "model/prompt/settings cell). Judge-based (LLM-graded) tests are noisy at "
+             "n=1 — use e.g. --eval-repeats=5 before trusting a pass-rate comparison.",
+    )
+
+
+def pytest_generate_tests(metafunc):
+    """Add a hidden 'repeat' dimension to every eval test, without editing each test file.
+
+    Appends a `repeat=runN` segment to the test id (matching the existing
+    `model=...,prompt=...` id convention used throughout tests/eval) so the report
+    tooling can tell how many independent samples back a given pass rate.
+    """
+    n = metafunc.config.getoption("--eval-repeats")
+    if n <= 1:
+        return
+    if not any(metafunc.definition.iter_markers("eval")):
+        return
+    already_parametrized = "repeat" in metafunc.fixturenames
+    if already_parametrized:
+        return  # already parametrized explicitly by the test
+    # The test function itself never references `repeat` — force it into the fixture
+    # closure (this is the same trick pytest-repeat uses) so parametrize can attach a
+    # hidden dimension to the id without every eval test needing to declare the arg.
+    metafunc.fixturenames.append("repeat")
+    metafunc.parametrize("repeat", range(n), ids=[f"run{i}" for i in range(n)], indirect=True)
+
+
+@pytest.fixture
+def repeat(request):
+    """Phantom fixture: exists only so pytest_generate_tests can parametrize eval
+    tests by repeat count without every test needing to declare the argument."""
+    return request.param
 
 
 # ---------------------------------------------------------------------------
@@ -95,24 +135,10 @@ TOOL_USE_MODELS = [
 # Hyperparameter variants
 # ---------------------------------------------------------------------------
 
-def _write_settings(temperature: float, top_p: float) -> dict:
+def _write_settings(temperature: float, top_p: float, think: bool = True) -> dict:
     return {
         "extra_body": {
-            "options": {
-                "num_ctx": OLLAMA_NUM_CTX,
-                "temperature": temperature,
-                "top_p": top_p,
-                "repeat_penalty": 1.1,
-                "kv_cache_type": "q8_0",
-            }
-        }
-    }
-
-
-def _tool_settings(temperature: float, top_p: float) -> dict:
-    return {
-        "extra_body": {
-            "think": False,
+            "think": think,
             "options": {
                 "num_ctx": OLLAMA_NUM_CTX,
                 "temperature": temperature,
@@ -124,15 +150,36 @@ def _tool_settings(temperature: float, top_p: float) -> dict:
     }
 
 
+def _tool_settings(temperature: float, top_p: float, think: bool = False) -> dict:
+    return {
+        "extra_body": {
+            "think": think,
+            "options": {
+                "num_ctx": OLLAMA_NUM_CTX,
+                "temperature": temperature,
+                "top_p": top_p,
+                "repeat_penalty": 1.1,
+                "kv_cache_type": "q8_0",
+            },
+        }
+    }
+
+
+# `think=False` is the single biggest latency lever for the qwen3/qwen3.5 reasoning
+# models (qwen3.5 averages 60-200s/call with thinking on) but was never swept in any
+# eval run before this. Add no-think variants alongside the existing temp/top_p sweeps
+# so a future run can show whether disabling it costs any accuracy.
 WRITER_SETTINGS_VARIANTS = [
-    pytest.param(AgentsConfiguration.NUNTIUS.model_settings, id="temp=0.35,top_p=0.9"),
-    pytest.param(_write_settings(0.1, 0.7), id="temp=0.1,top_p=0.7"),
-    pytest.param(_write_settings(0.6, 0.95), id="temp=0.6,top_p=0.95"),
+    pytest.param(AgentsConfiguration.NUNTIUS.model_settings, id="temp=0.35,top_p=0.9,think=default"),
+    pytest.param(_write_settings(0.1, 0.7), id="temp=0.1,top_p=0.7,think=True"),
+    pytest.param(_write_settings(0.6, 0.95), id="temp=0.6,top_p=0.95,think=True"),
+    pytest.param(_write_settings(0.35, 0.9, think=False), id="temp=0.35,top_p=0.9,think=False"),
 ]
 
 REVIEWER_SETTINGS_VARIANTS = [
-    pytest.param(AgentsConfiguration.COGITATOR.model_settings, id="temp=0.1,top_p=0.7"),
-    pytest.param(_tool_settings(0.3, 0.85), id="temp=0.3,top_p=0.85"),
+    pytest.param(AgentsConfiguration.COGITATOR.model_settings, id="temp=0.1,top_p=0.7,think=default"),
+    pytest.param(_tool_settings(0.3, 0.85), id="temp=0.3,top_p=0.85,think=False"),
+    pytest.param(_tool_settings(0.3, 0.85, think=True), id="temp=0.3,top_p=0.85,think=True"),
 ]
 
 
